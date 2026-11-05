@@ -447,9 +447,23 @@ class DshAdapterTests(unittest.TestCase):
             'reason': {'kind': 'completed', 'error': {'code': 'MISSING_CREDENTIAL'}}})), 'E_DSH_SCHEMA')
 
     def test_terminal_error_exit_zero_or_one_never_success(self):
-        for exit_code in (0, 1):
-            self.assertCategory(self.terminal_failure(exit_code=exit_code), 'auth_failed')
-            self.assertCategory(self.terminal_failure(_terminal_error('UNKNOWN'), exit_code=exit_code), 'unknown_failure')
+        cases = (
+            ('MISSING_CREDENTIAL', 1, None, 'auth_failed'),
+            ('MISSING_CREDENTIAL', 0, None, 'unknown_failure'),
+            ('MISSING_CREDENTIAL', None, None, 'unknown_failure'),
+            ('MISSING_CREDENTIAL', 2, None, 'unknown_failure'),
+            ('MISSING_CREDENTIAL', -9, None, 'unknown_failure'),
+            ('MISSING_CREDENTIAL', 1, 9, 'unknown_failure'),
+            ('UNKNOWN', 1, None, 'unknown_failure'),
+            ('UNKNOWN', 0, None, 'unknown_failure'),
+        )
+        for code, exit_code, os_signal, expected in cases:
+            with self.subTest(code=code, exit_code=exit_code, os_signal=os_signal):
+                event = self.assertCategory(self.terminal_failure(_terminal_error(code),
+                    exit_code=exit_code, os_signal=os_signal), expected)
+                self.assertIsNotNone(event['category'])
+                self.assertNotEqual(event['signal'], 'none')
+                self.assertEqual(event['exit_code'], exit_code)
 
     def test_nonzero_exit_cannot_succeed_after_progress_and_tools(self):
         raw = _wire(_session(), *_progress(), {'type': 'tool_result', 'completed': True}, _final())

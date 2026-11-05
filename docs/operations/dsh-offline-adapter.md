@@ -76,13 +76,16 @@ runner 的 exit_code、os_signal 和 truncated 都从 NDJSON 外传入；不从�
 输入元数据可信只是测试 harness 的约定，真实进程证明留给未来 worker。
 
 **已观测终止路径**：仅在合法 final.reason.kind=error 下读取精确的
-`final.reason.error.code`。MISSING_CREDENTIAL → auth_failed；缺失、非字符串或空 code
-拒绝；其它字符串一律 unknown_failure，包括 QUOTA/RATE_LIMIT/AUTH/TIMEOUT 等尚未
+`final.reason.error.code`。仅 **MISSING_CREDENTIAL + 独立 runner.exit_code=1 +
+runner.os_signal=None** 的组合映射 auth_failed。退出码为 0、Unknown/None、其它非零码
+或存在任意 OS signal 时均为 unknown_failure，不凭终止码扩展尚未观测的 runner 结果。
+缺失、非字符串或空 code 拒绝；其它字符串一律 unknown_failure，包括 QUOTA/RATE_LIMIT/AUTH/TIMEOUT 等尚未
 在此路径观测的码，不因名称出现在 provisional 表中就扩大映射。未知终止码不能被额外
 fixture 证明提升为额度/限流；已知终止认证错误与独立错误证明冲突时拒绝。
 
 终止 kind=error 永远不是成功，即使外部 exit_code=0、status 或工具声称完成。
-只观测过 exit=1 的失败；exit=0 与终止错误的组合只是防误判的 synthetic 测试。
+只观测过 exit=1 且无 OS signal 的该认证失败；其它退出/信号组合只是防误判的 synthetic
+测试，不是新增运行证据。exit=0 + completed 的成功路径仍为 documented-only，未实测。
 message、final.text、thinking、tool/status payload、任意 code/error.code 或其它 JSON
 字段均不能提供分类依据；除了上述精确路径，默认不读取 JSON 错误码或 HTTP/Retry-After。
 

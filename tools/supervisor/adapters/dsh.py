@@ -278,8 +278,9 @@ class DshOfflineAdapter:
                 _reject('E_DSH_FINAL_MISSING')
             signal = _code_signal(record.runner.code_evidence, errors)
             if final_kind == 'error':
-                # 仅此精确路径的 MISSING_CREDENTIAL 已有失败路径证据；其它原生码不升级。
-                if terminal_code == 'MISSING_CREDENTIAL':
+                # 仅 exit=1、无 OS signal 的此终止码组合已有证据；歧义 runner 结果不升级。
+                if (terminal_code == 'MISSING_CREDENTIAL' and record.runner.exit_code == 1 and
+                        record.runner.os_signal is None):
                     if errors and signal != 'auth_failed':
                         _reject('E_DSH_CONFLICT')
                     signal = 'auth_failed'
