@@ -1,0 +1,46 @@
+﻿# ---- 敏感与本地环境 ----
+*.env
+.env.*
+secrets/
+*.secret
+*.key
+*.pem
+*.pfx
+*credential*
+*token*
+*.cookie
+
+# ---- 原始证据（不随仓库分发）----
+# 截图 / 录屏
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.bmp
+*.gif
+*.mp4
+*.mkv
+# 运行日志与结果
+engine/logs/
+logs/
+*.csv
+summary-*.json
+
+# ---- PowerShell 本地产物 ----
+*.log
+*.tmp
+*.bak
+*.orig
+.vscode/
+.idea/
+
+# ---- Windows ----
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---- 例外：允许纳入的小体积静态资源（如需）----
+# !docs/assets/*.png
+
+# ---- 例外：已审核的回归测试 fixtures（见 tests/fixtures/README.md）----
+!tests/fixtures/2048/*.png

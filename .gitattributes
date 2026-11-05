@@ -1,0 +1,28 @@
+# 统一换行符为 LF（仓库内与检出后一致）
+#
+# 说明：
+#   - 本文件只影响换行符，不改变文件编码。
+#   - 所有 .ps1 / .psm1 仍为 UTF-8（无 BOM）保存；PS 5.1 读取时必须在代码中显式
+#     指定 -Encoding UTF8（见 engine/README.md）。LF 换行对 PowerShell 5.1 完全兼容。
+#   - 图片按二进制处理，避免 Git 做任何文本转换。
+
+* text=auto eol=lf
+
+*.ps1   text eol=lf
+*.psm1  text eol=lf
+*.psd1  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.csv   text eol=lf
+.gitignore    text eol=lf
+.gitattributes text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.bmp   binary
