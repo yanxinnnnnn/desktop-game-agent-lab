@@ -4,159 +4,155 @@
 |---|---|
 | 状态 | 设计稿（design-only），不含实现 |
 | 关联 | [#7](https://github.com/yanxinnnnnn/desktop-game-agent-lab/issues/7)、[fwj-task-state-manager.md](fwj-task-state-manager.md) |
-| 目标 | 在没有真实游戏、没有截图入库的前提下，用**可复现的转录数据**回归任务状态机与判定逻辑 |
+| 版本 | 第二版（回应 PR #8 审查：修正 T3/T7/T10/T13，收紧评估口径） |
 
 ---
 
-## 1. 评估什么、不评估什么
+## 1. 评估边界
 
 ### 1.1 能离线评估
 
-- 任务阶段（stage）识别是否与标注一致；
-- `ActionIntent` → 期望后置条件 → `VerificationResult` 的判定逻辑；
-- 幂等、停止规则、不可逆操作门禁、恢复策略；
-- 状态回放：给一串观察，最终状态是否等于标注终态。
+- 合同语义：`revision` / `attempt_no` / `stage` 的分离是否自洽；
+- `ActionIntent` → 后置条件 → `VerificationResult` 的判定逻辑；
+- 幂等、TTL/窗口校验、停止规则、恢复策略；
+- 给一串观察，最终 `stage` 与 `flags` 是否符合不变量。
 
-### 1.2 不能离线评估（必须在真实环境做）
+### 1.2 不能离线评估
 
 | 项 | 原因 |
 |---|---|
-| 像素识别准确率（任务追踪/对话框/面板） | 需要真实截图；仓库不存原始截图（`docs/evidence/README.md`） |
-| 时序与动画（点击后多久稳定） | 需要连续帧 |
-| UIPI / 输入通道 | 需要真实游戏进程（POC-001/003） |
+| 像素识别准确率（任务/对话/面板） | 无原始截图入库，且单任务样本不足以代表分辨率/字体/布局变化 |
+| 对其他任务的泛化 | 只有「新手试炼」一个成功路径 |
+| 时序与动画稳定时间 | 需要连续帧 |
+| UIPI / 输入通道 | 需要真实游戏进程 |
 
-> 因此本方案的结论只能支持"状态机与判定逻辑正确"，**不能**代替视觉识别验收。
+> **本方案的结论不能外推**：它只说明"契约与判定逻辑在该 fixture 集上自洽"，
+> 既不证明 OCR/视觉识别准确率，也不证明对其他任务可迁移。
 
 ---
 
-## 2. 数据来源与证据等级
+## 2. 数据来源、证据等级与标注流程
 
-| 来源 | 内容 | 等级 |
+| 来源 | 内容 | 标注 |
 |---|---|---|
-| POC-002 报告 §2 的 15 步表 | 每步的"观察到的状态 / 指令 / 验证结果" | **documented observation**（转录级） |
-| POC-002 §2.1 | 任务追踪文案的三次演变 | documented observation |
-| 人工构造的异常场景（T8–T10、T12） | 为覆盖失败路径而编写 | **synthetic**（明确标注） |
+| POC-002 报告 §2 的 15 步表 | 每步"观察 / 指令 / 验证结果" | `documented`（转录级） |
+| POC-002 §2.1 | 任务文案的三次演变 | `documented` |
+| 人工构造的异常场景 | 覆盖失败路径 | `synthetic`（必须显式标注） |
 
-**诚实声明**：POC-002 当时确实有截图，但截图未随仓库分发；仓库内只有文字记录。
-因此本方案的所有样本都是**转录级**，不是像素级 ground truth。任何声称"识别精度已被离线验证"的结论都是越界的。
+**POC-002 当时有截图，但截图未随仓库分发**（C5）。因此仓库内样本一律是转录级。
+任何"识别精度已被离线验证"的表述都是越界的。
+
+### 2.1 标注流程（采纳 CTO 对 Q2 的决策）
+
+1. **DeepSeek 准备初步标注**（含 `source`、`label_confidence`、逐条理由）；
+2. **Founder 校验关键 ground-truth 标签**（对照本地截图），确认或驳回；
+3. **CTO 审核标注 schema、冲突项与覆盖率**；
+4. 无法确认的标签保持 `unknown`，**不得编造**。
 
 ---
 
 ## 3. 数据集格式
 
-建议 JSONL，一行一条观察，字段与 `Observation` 同构，但**去掉截图二进制**，只留 `screenshot.sha256`（可为占位）。
+JSONL，一行一条观察；字段与 `Observation` 同构，但**不含像素**，只留哈希与可选本地引用。
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "sample_id": "poc002-step-01",
   "source": "poc002-documented",
   "label_confidence": "documented",
+  "annotated_by": "deepseek-preliminary",
+  "validated_by": "pending-founder",
   "observation": {
+    "observation_id": "obs-0001",
+    "observation_seq": 1,
     "ui_mode": "world",
     "scene": { "name": "建邺城", "coords": { "x": 183, "y": 25 } },
     "quest": {
       "quest_id": "新手试炼",
-      "title": "新手试炼",
       "objective_text": "熟悉的建邺城，人族使者似乎有事找自己",
-      "target_name": "人族使者"
+      "target_name": "人族使者",
+      "confidence": "observed"
     },
     "dialog": null,
     "panels": [],
-    "anomalies": []
+    "anomalies": [],
+    "observation_quality": "sufficient"
   },
-  "expected_state": {
-    "stage": "talk_to_envoy",
-    "ui_expectation": "world"
-  }
+  "expected": { "stage": "talk_to_envoy", "stage_source": "observed" }
 }
 ```
 
-**脱敏要求**
-
-- 角色名统一 `测试角色`，服务器统一 `[测试服务器]`，UID 不出现；
-- 不包含任何原始像素、窗口标题中的账号片段、本机路径；
-- 样本入库前需 Founder 批准（与 `docs/evidence/README.md` 的流程一致）。
+**脱敏**：角色名 `测试角色`、服务器 `[测试服务器]`、无 UID、无本机路径、无原始像素。
 
 ---
 
 ## 4. 用例目录
 
-> 每条用例给出：输入 → 期望输出 → 判定要点。
-
 ### 4.1 来自 POC-002 转录（documented）
 
 | ID | 场景 | 输入 | 期望 |
 |---|---|---|---|
-| **T1** | 阶段识别 | 三帧任务文案：①「…人族使者似乎有事找自己」②「设置召唤兽参战，再与人族使者对话」③「穿好武器与衣服，再与人族使者对话」 | 分别映射 `talk_to_envoy` / `set_pet_active` / `equip_gear`；`objective.evidence=observed` |
-| **T2** | 对话选项选择 | `ui_mode=dialog`，options=[主线任务, 我要做其他事情, 我点错了] | 生成 `click_semantic(target=主线任务)`，`risk=reversible`，`expected_postcondition={dialog.text 变化}` |
-| **T3** | 线性对话推进 | 连续 4 帧仅对话文本变化 | `revision` **不变**（不得因文本变化而迁移阶段） |
-| **T4** | 不可逆门禁 | 出现 4 个初始召唤兽选项 | `pending_decision` 置位；**未获批准时不得产出可执行 intent**；批准后才允许 `click_semantic` |
-| **T5** | 面板层级 | `panels=[宠物]`，面板内按钮「召唤兽」 | 点击后期望 `panels` 含 `召唤兽属性`；若仍只有 `宠物` → `rejected` |
-| **T6** | 双证据确认 | 仅按钮「参战→休息」但无宠物血条 | `flags.pet_active` 最大只能为 `inferred`，**不得标 observed** |
-| **T7** | 幂等 | 同一 `intent_id` 提交两次 | 第二次丢弃（postcondition 已成立），不得产生第二次点击 |
+| **T1** | 阶段识别 | 三帧任务文案 ①②③ | 分别映射 `talk_to_envoy` / `set_pet_active` / `equip_gear`，`stage_source=observed` |
+| **T2** | 选项选择 | `ui_mode=dialog`，options=[主线任务, 我要做其他事情, 我点错了] | 生成 `click_semantic(主线任务)`，`risk=reversible`，后置条件为"对话文本变化" |
+| **T3** | 对话推进（修正） | 连续 4 帧仅 `dialog.text_hash` 变化 | **`revision` 每帧 +1**；**`stage` 保持不变**；不得判为"卡住"（旧版"revision 不变"已废弃） |
+| **T4** | 不可逆门禁 | 出现 4 个初始召唤兽选项 | `pending_decision` 置位；未批准时 **不得产出可执行 intent** |
+| **T5** | 面板层级 | `panels=[宠物]` + 面板内「召唤兽」按钮 | 点击后期望 `panels` 含 `召唤兽属性`；仍只有「宠物」→ `rejected` |
+| **T6** | `pet_active` 分级（修正） | 三种输入：仅按钮变「休息」／按钮+血条／都不可见 | 分别 → `inferred` / `observed` / `unknown`；**不允许多证据缺失时标 observed** |
+| **T7** | 幂等（修正） | 同一 `intent_id` 提交两次；另一次**不同** `attempt_no` 的"继续"点击 | 第一次执行；同 id 第二次 `E_DUPLICATE_ATTEMPT`；不同 attempt 的点击**必须允许** |
+| **T13** | 15 步回放（修正） | POC-002 的 15 条观察 | 仅断言不变量：stage 在第 8、15 步迁移；`revision` 严格递增；`pet_active` 在第 13 步前非 observed；最终 `stage=equip_gear`。**不断言 revision 的具体数值** |
 
 ### 4.2 合成异常场景（synthetic）
 
-| ID | 场景 | 输入 | 期望 |
-|---|---|---|---|
-| **T8** | 关键字段低置信 | `quest.objective_text` 为空且 `confidence=unknown` | `ambiguous` → 停止（S4），不生成 intent |
-| **T9** | 未知弹窗 | `ui_mode=modal`，文案不在已知集合 | 立即停止（S3），**不得点击任何按钮** |
-| **T10** | 无进展 | 连续 3 帧 `revision` 相同 | 停止（S2），报告卡住 |
-| **T11** | 执行器回执不可信 | 人回复"完成"，但前后帧无差异 | `verdict=rejected`，`error_code=E_NO_CHANGE`，进入恢复 |
-| **T12** | 窗口身份不符 | `observation.window.hwnd != task_state.window.hwnd` | 停止（S7），不发送输入 |
-
-### 4.3 端到端回放
-
-| ID | 场景 | 输入 | 期望 |
-|---|---|---|---|
-| **T13** | 15 步转录回放 | POC-002 的 15 条观察记录 | 终态：`stage=equip_gear`、`revision=10`、`flags.pet_active=true`、`open_questions` 含已知 Unknown |
-
-> T13 是本方案的核心回归：它把"一次顺利路径"固化下来，任何状态机改动都必须仍能复现这 10 次迁移。
-
----
-
-## 5. 判定与指标
-
-### 5.1 指标
-
-| 指标 | 定义 | 目标 |
+| ID | 场景 | 期望 |
 |---|---|---|
-| **State accuracy** | 标注样本上逐字段（stage / target_name / ui_mode / panels）正确率 | ≥ 95%（转录级） |
-| **Transition verification rate** | 期望后置条件被正确判定（confirmed/rejected）的比例 | 100% |
-| **False-confirm rate** | 无证据却判 `confirmed` 的比例 | **必须 0** |
-| **Recovery correctness** | T8–T12 的处理是否与策略一致 | 100% |
-| **Refusal correctness** | 不可逆/未知弹窗场景是否正确拒绝 | **100%** |
-| **Human correction count** | 回放中需要人工改状态次数 | 0（离线） |
+| **T8** | 关键字段 `unusable` | `ambiguous` → 停止（S4） |
+| **T9** | 未知弹窗 | 立即停止（S3），**不点击任何按钮** |
+| **T10** | 无进展（修正） | 连续 3 次尝试均未产生**期望的可观测进展** → 停止（S2）；**不以 revision 是否变化为判据** |
+| **T11** | 终帧无变化（修正，分两支） | (a) 区域清晰且后置条件明确为假 → `rejected`；(b) 区域被遮挡/低置信 → `ambiguous` |
+| **T12** | 窗口身份不符 | 停止（S7） |
+| **T14** | 陈旧 intent | 观察与执行之间窗口移动 → Guard 返回 `E_STALE_INTENT`，重新观察，**不重试原 intent** |
+| **T15** | 任务追踪缺失 | `stage` 保持不变、`stage_source=inferred`、写入 `open_questions`；**不得**把推断阶段标为 observed |
 
-> `false-confirm = 0` 与 `refusal = 100%` 是**硬门槛**：宁可判 `ambiguous` 也不许误判成功。
+### 4.3 用例分布说明
 
-### 5.2 运行方式
-
-- 纯函数：输入 JSONL，输出判定结果与最终状态；
-- 不依赖窗口、位图、游戏进程，可在 CI 中运行；
-- 输出结构化报告（JSON），便于对比不同版本。
+- T1–T7、T13 来自**单一成功路径**的转录；
+- T8–T12、T14–T15 为**人工构造**；
+- 没有任何用例验证"跨任务泛化"或"像素识别精度"。
 
 ---
 
-## 6. 与真实环境的衔接
+## 5. 指标（回归目标，非泛化证据）
 
-| 阶段 | 数据 | 目的 |
+| 指标 | 定义 | 目标 | 说明 |
+|---|---|---|---|
+| 契约不变量通过率 | T1–T15 中不变量断言通过比例 | **100%** | 硬门槛 |
+| `false-confirm` | 无证据却判 `confirmed` 的比例 | **0** | 硬门槛 |
+| 拒绝正确率 | 不可逆/未知弹窗/陈旧 intent 场景正确拒绝 | **100%** | 硬门槛 |
+| 阶段分类准确率 | 标注样本上 `stage` 正确率 | ≥ 95% | **仅对该 fixture 集**，不代表泛化 |
+| 恢复正确率 | T8–T12、T14–T15 处理与策略一致 | 100% | — |
+
+> 上述 95% 是**该 fixture 集上的回归目标**，不是 OCR 准确率、也不是跨任务泛化指标。
+> 由于样本量极小（1 个任务、15 步、若干合成样例），任何统计意义上的置信度都不成立。
+
+---
+
+## 6. 运行方式
+
+- 纯函数：JSONL 进，判定与最终状态出；
+- 不依赖窗口/位图/游戏进程，可在 CI 运行；
+- 输出 JSON 报告，便于版本对比；
+- 每次运行须记录 fixture 的 `source` 与 `label_confidence` 分布。
+
+---
+
+## 7. Q1–Q3 的决策与落地（采纳 CTO 结论）
+
+| 问题 | 决策 | 落地要求 |
 |---|---|---|
-| 离线（本方案） | 转录 + 合成 | 验证状态机与判定逻辑 |
-| 半离线 | 获批的脱敏截图 + 人工标注 | 验证解析器（M3） |
-| 在线（人工执行） | 真实画面 + 人执行 | 验证端到端闭环（M4） |
-
-三层不可互相替代：离线全绿**不代表**识别可用；在线成功也**不能**反推状态机没有边界缺陷。
-
----
-
-## 7. 入库前的合规要求
-
-1. 样本不含账号、角色名、UID、服务器、本机路径、原始像素；
-2. 每条样本标注 `source`（`poc002-documented` / `synthetic`）与 `label_confidence`；
-3. 合成样本必须显式标记 `synthetic`，**不得**伪装成实测；
-4. 新增样本需 Founder 批准，流程见 `docs/evidence/README.md`。
+| **Q1**：能否用 POC-002 截图做解析器回归 | **有条件同意** | 仅接受**逐张审核过的、裁剪去标识**的私有 fixture；不得批量上传原始截图；不得含 UI/用户/账号信息；本地保留来源映射；**不得自动上传** |
+| **Q2**：标注由谁负责 | DeepSeek 初标 → Founder 校验关键标签 → CTO 审 schema/冲突/覆盖 | 无法确认的标签保持 `unknown` |
+| **Q3**：是否需要第二个任务 | **需要**，但**不阻塞 M1–M2** | 在 M3/M4 声称可迁移前必须补充 |
 
 ---
 
@@ -164,6 +160,6 @@
 
 | # | 问题 | 影响 |
 |---|---|---|
-| Q1 | 是否允许把 POC-002 的**脱敏截图**作为解析器回归样本 | 决定 M3 能否离线验收 |
-| Q2 | 转录样本的标注由谁复核 | 影响 T1/T13 的可信度 |
-| Q3 | 是否需要第二个任务作为对照样本 | 单一任务样本存在过拟合风险 |
+| Q4 | 逐张审核的具体标准（裁剪边界、允许保留的 UI 元素） | 决定 M3 fixture 是否合规 |
+| Q5 | 第二个任务选哪个（同城新手链 vs 完全不同任务） | 影响泛化结论的强度 |
+| Q6 | 标注冲突的仲裁规则（Founder 与 CTO 意见不一致时） | 影响 T1/T13 的可信度 |
