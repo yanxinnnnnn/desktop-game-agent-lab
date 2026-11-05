@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:fwj:v1.1:verification-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "verification_id": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+    },
+    "intent_id": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+    },
+    "before_observation_id": {
+      "anyOf": [
+        {
+          "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "after_observation_id": {
+      "anyOf": [
+        {
+          "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verdict": {
+      "enum": [
+        "confirmed",
+        "rejected",
+        "ambiguous"
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected": {},
+          "actual": {},
+          "pass": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "expected",
+          "actual",
+          "pass"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "state_patch": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stage_source": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        },
+        "objective": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidence": {
+              "enum": [
+                "observed",
+                "inferred",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "text",
+            "target_name",
+            "evidence"
+          ],
+          "additionalProperties": false
+        },
+        "location": {
+          "type": "object",
+          "properties": {
+            "scene": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "coords": {
+              "anyOf": [
+                {
+                  "$ref": "urn:fwj:v1.1:common#/$defs/point"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "scene",
+            "coords"
+          ],
+          "additionalProperties": false
+        },
+        "ui_expectation": {
+          "enum": [
+            "world",
+            "dialog",
+            "panel",
+            "modal",
+            "loading",
+            "unknown"
+          ]
+        },
+        "flags": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/flags"
+        },
+        "pending_decision": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "risk": {
+                  "enum": [
+                    "reversible",
+                    "irreversible"
+                  ]
+                }
+              },
+              "required": [
+                "question",
+                "options",
+                "risk"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "enum": [
+            "E_NO_CHANGE",
+            "E_UNEXPECTED_UI",
+            "E_LOW_CONFIDENCE",
+            "E_OCCLUDED",
+            "E_WINDOW_CHANGED",
+            "E_BLOCKED_INPUT"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observation_quality": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/quality"
+    },
+    "executor_receipt": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "verification_id",
+    "intent_id",
+    "before_observation_id",
+    "after_observation_id",
+    "verdict",
+    "checks",
+    "state_patch",
+    "error_code",
+    "observation_quality",
+    "executor_receipt"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "confirmed",
+              "rejected"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "observation_quality": {
+            "const": "sufficient"
+          },
+          "before_observation_id": {
+            "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+          },
+          "after_observation_id": {
+            "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+          },
+          "checks": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "confirmed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error_code": {
+            "type": "null"
+          },
+          "checks": {
+            "items": {
+              "properties": {
+                "pass": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "state_patch": {
+            "maxProperties": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "rejected"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "contains": {
+              "properties": {
+                "pass": {
+                  "const": false
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ]
+}

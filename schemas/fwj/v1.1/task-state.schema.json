@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:fwj:v1.1:task-state",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage_source": {
+      "enum": [
+        "observed",
+        "inferred",
+        "unknown"
+      ]
+    },
+    "objective": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "target_name",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "scene": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coords": {
+          "anyOf": [
+            {
+              "$ref": "urn:fwj:v1.1:common#/$defs/point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scene",
+        "coords"
+      ],
+      "additionalProperties": false
+    },
+    "window": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/identity"
+    },
+    "ui_expectation": {
+      "enum": [
+        "world",
+        "dialog",
+        "panel",
+        "modal",
+        "loading",
+        "unknown"
+      ]
+    },
+    "flags": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/flags"
+    },
+    "pending_decision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "risk": {
+              "enum": [
+                "reversible",
+                "irreversible"
+              ]
+            }
+          },
+          "required": [
+            "question",
+            "options",
+            "risk"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "observation_seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_attempt": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "attempt_id": {
+              "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+            },
+            "status": {
+              "enum": [
+                "proposed",
+                "attempted",
+                "confirmed",
+                "rejected",
+                "ambiguous",
+                "discarded"
+              ]
+            },
+            "verification_id": {
+              "anyOf": [
+                {
+                  "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "attempt_id",
+            "status",
+            "verification_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+      },
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema_version",
+    "session_id",
+    "task_id",
+    "stage",
+    "stage_source",
+    "objective",
+    "location",
+    "window",
+    "ui_expectation",
+    "flags",
+    "pending_decision",
+    "revision",
+    "observation_seq",
+    "last_attempt",
+    "open_questions",
+    "evidence_refs"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "const": "unknown"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "stage_source": {
+            "const": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "objective": {
+            "properties": {
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "objective": {
+            "properties": {
+              "evidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

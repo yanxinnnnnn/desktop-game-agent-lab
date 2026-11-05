@@ -1,0 +1,711 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:fwj:v1.1:common",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "minLength": 26,
+      "maxLength": 26
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "enum": [
+        "observed",
+        "inferred",
+        "unknown"
+      ]
+    },
+    "quality": {
+      "enum": [
+        "sufficient",
+        "degraded",
+        "unusable"
+      ]
+    },
+    "point": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "rect": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "w": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "h": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "hwnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title_hash": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+        }
+      },
+      "required": [
+        "hwnd",
+        "pid",
+        "title_hash"
+      ],
+      "additionalProperties": false
+    },
+    "origin_window": {
+      "type": "object",
+      "properties": {
+        "hwnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title_hash": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+        },
+        "rect": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/rect"
+        }
+      },
+      "required": [
+        "hwnd",
+        "pid",
+        "title_hash",
+        "rect"
+      ],
+      "additionalProperties": false
+    },
+    "risk": {
+      "enum": [
+        "reversible",
+        "irreversible"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "world",
+        "dialog",
+        "panel",
+        "modal",
+        "loading",
+        "unknown"
+      ]
+    },
+    "scene": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coords": {
+          "anyOf": [
+            {
+              "$ref": "urn:fwj:v1.1:common#/$defs/point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "coords",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coords": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "coords"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "quest": {
+      "type": "object",
+      "properties": {
+        "quest_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "objective_text": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "quest_id",
+        "title",
+        "objective_text",
+        "target_name",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "quest_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "quest_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "title": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "objective_text": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "objective_text"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_name": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "target_name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dialog": {
+      "type": "object",
+      "properties": {
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text_hash": {
+          "anyOf": [
+            {
+              "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "continue_affordance": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "speaker",
+        "text",
+        "text_hash",
+        "options",
+        "continue_affordance",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "speaker": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "speaker"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "text": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "text_hash": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "text_hash"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "options": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "options"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "continue_affordance": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "continue_affordance"
+            ]
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "panel": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "confidence"
+      ],
+      "additionalProperties": false
+    },
+    "interactable": {
+      "type": "object",
+      "properties": {
+        "semantic_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "urn:fwj:v1.1:common#/$defs/rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "semantic_id",
+        "label",
+        "region",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "label": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "region": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "confidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "flag": {
+      "type": "object",
+      "properties": {
+        "value": {},
+        "evidence": {
+          "enum": [
+            "observed",
+            "inferred",
+            "unknown"
+          ]
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "value",
+        "evidence",
+        "observations"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence": {
+                "const": "observed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observations": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "urn:fwj:v1.1:common#/$defs/flag"
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:/(?:[^~/]|~[01])*)+$"
+        },
+        "expected": {}
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

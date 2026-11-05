@@ -1,0 +1,171 @@
+{
+  "source": "synthetic",
+  "label_confidence": "synthetic",
+  "observation": {
+    "schema_version": "1.1",
+    "observation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "observation_seq": 1,
+    "captured_at": "2026-01-01T00:00:00Z",
+    "window": {
+      "hwnd": 101,
+      "pid": 201,
+      "title_hash": "eb84ffd4997ec3c73e7a1e222b0cfa516220b1ef9157334f54aa1a589353facc",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 800,
+        "h": 600
+      },
+      "is_foreground": true,
+      "elevation": "unknown"
+    },
+    "screenshot": {
+      "sha256": "46270bd604d3f59fc5fde1fd4ae5d65ef04483d89b8ba2b662ff252f745d275f",
+      "width": 800,
+      "height": 600
+    },
+    "ui_mode": "dialog",
+    "scene": {
+      "name": null,
+      "coords": null,
+      "confidence": "unknown"
+    },
+    "quest": {
+      "quest_id": null,
+      "title": null,
+      "objective_text": null,
+      "target_name": null,
+      "confidence": "unknown"
+    },
+    "dialog": {
+      "speaker": "合成 NPC",
+      "text": "合成对话 A",
+      "text_hash": "13aaba727acc024e3e5af042e53b45fc05ade37c2056e451dbd27df24cbbf769",
+      "options": [],
+      "continue_affordance": true,
+      "confidence": "observed"
+    },
+    "panels": [],
+    "interactables": [
+      {
+        "semantic_id": "continue",
+        "label": "继续",
+        "region": {
+          "x": 10,
+          "y": 10,
+          "w": 20,
+          "h": 20
+        },
+        "confidence": "observed"
+      }
+    ],
+    "anomalies": [],
+    "observation_quality": "sufficient"
+  },
+  "task_state": {
+    "schema_version": "1.1",
+    "session_id": "synthetic-session",
+    "task_id": "synthetic-task",
+    "stage": "synthetic-dialog",
+    "stage_source": "inferred",
+    "objective": {
+      "text": null,
+      "target_name": null,
+      "evidence": "unknown"
+    },
+    "location": {
+      "scene": null,
+      "coords": null
+    },
+    "window": {
+      "hwnd": 101,
+      "pid": 201,
+      "title_hash": "eb84ffd4997ec3c73e7a1e222b0cfa516220b1ef9157334f54aa1a589353facc"
+    },
+    "ui_expectation": "dialog",
+    "flags": {
+      "example_flag": {
+        "value": null,
+        "evidence": "unknown",
+        "observations": []
+      }
+    },
+    "pending_decision": null,
+    "revision": 0,
+    "observation_seq": 1,
+    "last_attempt": null,
+    "open_questions": [
+      "任务追踪不可读（合成）"
+    ],
+    "evidence_refs": [
+      "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    ]
+  },
+  "action_intent": {
+    "schema_version": "1.1",
+    "intent_id": "48cdfea14bfd4526e30decf44e1d7174d234c02e1f1f16832323af2f9faccb5e",
+    "attempt_no": 1,
+    "proposed_by": "planner",
+    "kind": "click_semantic",
+    "target": {
+      "semantic_id": "continue",
+      "label": "继续"
+    },
+    "resolved_point": {
+      "x": 20,
+      "y": 20
+    },
+    "origin_observation": {
+      "observation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "observation_seq": 1,
+      "captured_at": "2026-01-01T00:00:00Z",
+      "window": {
+        "hwnd": 101,
+        "pid": 201,
+        "title_hash": "eb84ffd4997ec3c73e7a1e222b0cfa516220b1ef9157334f54aa1a589353facc",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 800,
+          "h": 600
+        }
+      }
+    },
+    "key": null,
+    "preconditions": [
+      {
+        "path": "/stage",
+        "expected": "synthetic-dialog"
+      }
+    ],
+    "expected_postcondition": {
+      "type": "dialog_text_changed"
+    },
+    "risk": "reversible",
+    "requires_human_approval": false,
+    "created_at": "2026-01-01T00:00:00Z",
+    "expires_at": "2026-01-01T00:00:05Z",
+    "ttl_ms": 5000,
+    "state_revision": 0
+  },
+  "verification_result": {
+    "schema_version": "1.1",
+    "verification_id": "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+    "intent_id": "48cdfea14bfd4526e30decf44e1d7174d234c02e1f1f16832323af2f9faccb5e",
+    "before_observation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "after_observation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "verdict": "confirmed",
+    "checks": [
+      {
+        "name": "dialog_text_changed",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      }
+    ],
+    "state_patch": {},
+    "error_code": null,
+    "observation_quality": "sufficient",
+    "executor_receipt": null
+  }
+}

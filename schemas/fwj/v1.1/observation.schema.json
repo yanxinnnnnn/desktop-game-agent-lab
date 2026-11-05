@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:fwj:v1.1:observation",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "observation_id": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/ulid"
+    },
+    "observation_seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "captured_at": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/timestamp"
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "hwnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title_hash": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+        },
+        "rect": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/rect"
+        },
+        "is_foreground": {
+          "type": "boolean"
+        },
+        "elevation": {
+          "enum": [
+            "elevated",
+            "not-elevated",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "hwnd",
+        "pid",
+        "title_hash",
+        "rect",
+        "is_foreground",
+        "elevation"
+      ],
+      "additionalProperties": false
+    },
+    "screenshot": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "$ref": "urn:fwj:v1.1:common#/$defs/sha256"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "local_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sha256",
+        "width",
+        "height"
+      ],
+      "additionalProperties": false
+    },
+    "ui_mode": {
+      "enum": [
+        "world",
+        "dialog",
+        "panel",
+        "modal",
+        "loading",
+        "unknown"
+      ]
+    },
+    "scene": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/scene"
+    },
+    "quest": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/quest"
+    },
+    "dialog": {
+      "anyOf": [
+        {
+          "$ref": "urn:fwj:v1.1:common#/$defs/dialog"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "panels": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:fwj:v1.1:common#/$defs/panel"
+      },
+      "uniqueItems": true
+    },
+    "interactables": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:fwj:v1.1:common#/$defs/interactable"
+      },
+      "uniqueItems": true
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "unknown_modal",
+          "scroll",
+          "focus_lost",
+          "occluded"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "observation_quality": {
+      "$ref": "urn:fwj:v1.1:common#/$defs/quality"
+    }
+  },
+  "required": [
+    "schema_version",
+    "observation_id",
+    "observation_seq",
+    "captured_at",
+    "window",
+    "screenshot",
+    "ui_mode",
+    "scene",
+    "quest",
+    "dialog",
+    "panels",
+    "interactables",
+    "anomalies",
+    "observation_quality"
+  ],
+  "additionalProperties": false
+}
