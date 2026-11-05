@@ -1,6 +1,8 @@
 """全部为 synthetic NDJSON 和模拟 runner 元数据；没有实际 DSH 输出或原生认证证明。"""
 
 from dataclasses import replace
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -21,6 +23,9 @@ _EVENT = '00000000-0000-4000-8000-000000000022'
 _URL = 'https://github.com/yanxinnnnnn/desktop-game-agent-lab/issues/21'
 _SESSION = 'synthetic-native-session'
 _CANARY = 'SYNTHETIC_PRIVATE_CONTENT_DO_NOT_EMIT'
+_CWD_CANARY = 'SYNTHETIC_PRIVATE_CWD_CANARY'
+_TEXT_CANARY = 'SYNTHETIC_PRIVATE_FINAL_TEXT_CANARY'
+_MESSAGE_CANARY = 'SYNTHETIC_PRIVATE_ERROR_MESSAGE_CANARY'
 
 
 def _wire(*events):
@@ -33,6 +38,16 @@ def _session(value=_SESSION):
 
 def _final(reason='completed', session=_SESSION):
     return {'type': 'final', 'sessionId': session, 'reason': {'kind': reason}}
+
+
+def _terminal_error(code='MISSING_CREDENTIAL', session=_SESSION):
+    return {'type': 'final', 'sessionId': session, 'text': '',
+            'reason': {'kind': 'error', 'error': {'code': code, 'message': _MESSAGE_CANARY}}}
+
+
+def _progress():
+    # 证据未披露阶段值所在的键；不虚构 phase/stage 字段，只重建四条已知 status。
+    return [{'type': 'status'} for _ in ('turn_start', 'step_start', 'step_end', 'turn_end')]
 
 
 class DshAdapterTests(unittest.TestCase):
@@ -64,6 +79,11 @@ class DshAdapterTests(unittest.TestCase):
         error = {'type': 'error'} if error is None else error
         return self.capture(_wire(_session(), error, _final('synthetic-noncompletion')),
                             exit_code=exit_code, code_evidence=evidence)
+
+    def terminal_failure(self, terminal=None, *, session=_SESSION, **runner):
+        terminal = _terminal_error(session=session) if terminal is None else terminal
+        return self.capture(_wire(_session(session) | {'cwd': _CWD_CANARY}, *_progress(), terminal),
+                            **({'exit_code': 1} | runner))
 
     def assertRejected(self, capture, code):
         result = self.adapter.parse(capture)
@@ -324,6 +344,124 @@ class DshAdapterTests(unittest.TestCase):
         result = store.ingest(self.capture(_wire(_session())), adapter=self.adapter)
         self.assertEqual(result['Code'], 'E_EVENT_INVALID')
         self.assertEqual(store.check()['Data'], before)
+
+    def test_observed_shaped_terminal_authentication_failure(self):
+        # 仅按 CTO 脱敏字段摘要重建，未复制真实 NDJSON、路径、Session ID 或错误正文。
+        capture = self.terminal_failure()
+        self.assertEqual(len(capture.ndjson.splitlines()), 6)
+        self.assertEqual(capture.runner.exit_code, 1)
+        self.assertEqual(capture.runner.code_evidence, ())
+        event = self.assertCategory(capture, 'auth_failed')
+        self.assertEqual(event['signal'], 'auth_failed')
+        self.assertEqual(event['exit_code'], 1)
+
+    def test_terminal_error_missing_or_nonstring_code_rejected(self):
+        for error in ({'message': _MESSAGE_CANARY}, {}, None, [],
+                      *({'code': code, 'message': _MESSAGE_CANARY} for code in
+                        (None, True, 0, 1.0, [], {'code': 'MISSING_CREDENTIAL'}, ''))):
+            terminal = _final('error')
+            terminal['reason']['error'] = error
+            self.assertRejected(self.terminal_failure(terminal), 'E_DSH_SCHEMA')
+        self.assertRejected(self.terminal_failure(_final('error')), 'E_DSH_SCHEMA')
+
+    def test_unobserved_terminal_codes_remain_unknown(self):
+        for code in ('QUOTA', 'ACCOUNT_QUOTA', 'RATE_LIMIT', 'AUTH', 'INVALID_CREDENTIAL',
+                     'TIMEOUT', 'SERVER', 'NO_ADAPTER', 'CONTEXT_WINDOW_EXCEEDED',
+                     'missing_credential', 'MISSING_CREDENTIAL_SUFFIX', 'UNVERIFIED_CODE'):
+            with self.subTest(code=code):
+                self.assertCategory(self.terminal_failure(_terminal_error(code)), 'unknown_failure')
+
+    def test_status_is_progress_without_field_path_assumptions(self):
+        statuses = _progress()
+        # 故意加入未核验的状态内容；不得搜索这些字段并建立完成/额度/认证结论。
+        statuses[0] |= {'fixture_extra': {'code': 'QUOTA', 'completed': True},
+                        'text': 'MISSING_CREDENTIAL', 'error': {'code': 'MISSING_CREDENTIAL'}}
+        self.assertRejected(self.capture(_wire(_session(), *statuses,
+            {'type': 'tool_result', 'completed': True})), 'E_DSH_FINAL_MISSING')
+        self.assertCategory(self.capture(_wire(_session(), *statuses, _final('unknown-final')), exit_code=1),
+                            'unknown_failure')
+
+    def test_status_still_obeys_session_order_and_limits(self):
+        self.assertRejected(self.capture(_wire({'type': 'status'}, _session(), _final())), 'E_DSH_ORDER')
+        self.assertRejected(self.capture(_wire(_session(), _final(), {'type': 'status'})), 'E_DSH_ORDER')
+        self.assertRejected(self.capture(_wire(_session(), {'type': 'status', 'sessionId': 'other'}, _final())),
+                            'E_DSH_SESSION')
+        self.assertRejected(self.capture(_wire(_session(), {'type': 'status', 'fixture_extra': 'x'*8193}, _final())),
+                            'E_DSH_LIMIT')
+        self.assertRejected(self.capture(_wire(_session(), *([{'type': 'status'}]*dsh.MAX_EVENTS), _final())),
+                            'E_DSH_LIMIT')
+
+    def test_private_observed_fields_dropped_in_results_repr_logs_and_sqlite(self):
+        terminal = _terminal_error() | {'text': _TEXT_CANARY}
+        capture = self.terminal_failure(terminal)
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors), patch('logging.Logger._log') as logger:
+            event = self.assertCategory(capture, 'auth_failed')
+            store = self.supervisor()
+            self.assertTrue(store.ingest(capture, adapter=self.adapter)['Ok'])
+            checkpoint = store.check()['Data']
+            logger.assert_not_called()
+        self.assertEqual(output.getvalue() + errors.getvalue(), '')
+        self.assertEqual(checkpoint['tasks'][0]['state'], 'BLOCKED_AUTH')
+        self.assertTrue(all(row['source'] == 'synthetic' for row in checkpoint['events']))
+        self.assertEqual(checkpoint['deliveries'][0]['reservations'], 0)
+        self.assertIsNone(checkpoint['tasks'][0]['resume_token'])
+        serialized = json.dumps(event) + json.dumps(checkpoint) + repr(capture) + repr(capture.runner) + repr(self.adapter)
+        raw_db = (Path(self.temp.name)/'checkpoint'/'supervisor.sqlite3').read_bytes()
+        for canary in (_CWD_CANARY, _TEXT_CANARY, _MESSAGE_CANARY, _SESSION):
+            self.assertNotIn(canary, serialized)
+            self.assertNotIn(canary.encode(), raw_db)
+
+    def test_private_fields_type_and_size_fail_closed(self):
+        for value in ({'private': _CANARY}, 42):
+            self.assertRejected(self.capture(_wire(_session() | {'cwd': value}, _final())), 'E_DSH_SCHEMA')
+            self.assertRejected(self.capture(_wire(_session(), _final() | {'text': value})), 'E_DSH_SCHEMA')
+            terminal = _terminal_error()
+            terminal['reason']['error']['message'] = value
+            self.assertRejected(self.terminal_failure(terminal), 'E_DSH_SCHEMA')
+        for field in ('cwd', 'text', 'message'):
+            session, terminal = _session(), _terminal_error()
+            if field == 'cwd':
+                session['cwd'] = 'x'*8193
+            elif field == 'text':
+                terminal['text'] = 'x'*8193
+            else:
+                terminal['reason']['error']['message'] = 'x'*8193
+            self.assertRejected(self.capture(_wire(session, terminal), exit_code=1), 'E_DSH_LIMIT')
+
+    def test_terminal_code_is_independent_of_all_prose_and_other_json_paths(self):
+        for code, category in (('MISSING_CREDENTIAL', 'auth_failed'), ('UNVERIFIED_CODE', 'unknown_failure')):
+            terminal = _terminal_error(code) | {'text': 'QUOTA MISSING_CREDENTIAL ACCOUNT_QUOTA'}
+            terminal['reason']['error']['message'] = 'QUOTA MISSING_CREDENTIAL'
+            model = [ {'type': kind, 'text': 'QUOTA MISSING_CREDENTIAL', 'code': 'QUOTA',
+                       'error': {'code': 'MISSING_CREDENTIAL'}} for kind in ('text', 'thinking', 'tool_result', 'status') ]
+            self.assertCategory(self.capture(_wire(_session(), *model, terminal), exit_code=1), category)
+
+    def test_terminal_unknown_cannot_be_upgraded_by_fixture_code(self):
+        raw = _wire(_session(), {'type': 'error'}, _terminal_error('QUOTA'))
+        self.assertCategory(self.capture(raw, exit_code=1, code_evidence=(self.evidence('QUOTA'),)), 'unknown_failure')
+        contradictory = _wire(_session(), {'type': 'error'}, _terminal_error())
+        self.assertRejected(self.capture(contradictory, exit_code=1,
+            code_evidence=(self.evidence('QUOTA'),)), 'E_DSH_CONFLICT')
+        self.assertRejected(self.capture(_wire(_session(), _final() | {
+            'reason': {'kind': 'completed', 'error': {'code': 'MISSING_CREDENTIAL'}}})), 'E_DSH_SCHEMA')
+
+    def test_terminal_error_exit_zero_or_one_never_success(self):
+        for exit_code in (0, 1):
+            self.assertCategory(self.terminal_failure(exit_code=exit_code), 'auth_failed')
+            self.assertCategory(self.terminal_failure(_terminal_error('UNKNOWN'), exit_code=exit_code), 'unknown_failure')
+
+    def test_nonzero_exit_cannot_succeed_after_progress_and_tools(self):
+        raw = _wire(_session(), *_progress(), {'type': 'tool_result', 'completed': True}, _final())
+        self.assertCategory(self.capture(raw, exit_code=1), 'unknown_failure')
+        # 成功形状仅为 documented-only 的 synthetic 测试，不代表 Windows 已成功运行。
+        self.assertCategory(self.capture(raw, exit_code=0), None)
+
+    def test_terminal_auth_native_uuid_is_not_resume_token(self):
+        native = '00000000-0000-4000-8000-000000000098'
+        event = self.assertCategory(self.terminal_failure(session=native, expected_session_id=native), 'auth_failed')
+        self.assertNotIn(native, json.dumps(event))
+        self.assertIsNone(event['resume_token'])
 
 
 if __name__ == '__main__':

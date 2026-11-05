@@ -180,7 +180,7 @@ def _lines(data):
 
 def _shape(event):
     if not isinstance(event, dict) or event.get('type') not in (
-            'session', 'text', 'thinking', 'tool_result', 'error', 'final'):
+            'session', 'status', 'text', 'thinking', 'tool_result', 'error', 'final'):
         _reject('E_DSH_SCHEMA')
     kind = event['type']
     if 'truncated' in event:
@@ -191,17 +191,36 @@ def _shape(event):
     if 'sessionId' in event and (not isinstance(event['sessionId'], str) or not event['sessionId']):
         _reject('E_DSH_SCHEMA')
     if kind in ('session', 'final'):
-        allowed = {'type', 'sessionId', 'truncated'} | ({'reason'} if kind == 'final' else set())
+        allowed = {'type', 'sessionId', 'truncated'} | ({'reason', 'text'} if kind == 'final' else {'cwd'})
         if 'sessionId' not in event or event.keys() - allowed:
             _reject('E_DSH_SCHEMA')
+        private_field = 'text' if kind == 'final' else 'cwd'
+        if private_field in event:
+            if not isinstance(event[private_field], str):
+                _reject('E_DSH_SCHEMA')
+            # 只删除本次 JSON 解码对象中的已校验字段；不改变调用者的原始捕获。
+            event.pop(private_field)
     if kind in ('text', 'thinking') and not isinstance(event.get('text'), str):
         _reject('E_DSH_SCHEMA')
     if kind == 'final':
         reason = event.get('reason')
-        if not isinstance(reason, dict) or set(reason) != {'kind'}:
+        if not isinstance(reason, dict):
             _reject('E_DSH_SCHEMA')
-        if not isinstance(reason['kind'], str) or not reason['kind']:
+        if not isinstance(reason.get('kind'), str) or not reason['kind']:
             _reject('E_DSH_SCHEMA')
+        if reason['kind'] == 'error':
+            terminal = reason.get('error')
+            if (set(reason) != {'kind', 'error'} or not isinstance(terminal, dict) or
+                    terminal.keys() - {'code', 'message'} or not isinstance(terminal.get('code'), str) or
+                    not terminal['code']):
+                _reject('E_DSH_SCHEMA')
+            if 'message' in terminal:
+                if not isinstance(terminal['message'], str):
+                    _reject('E_DSH_SCHEMA')
+                terminal.pop('message')
+        elif set(reason) != {'kind'}:
+            _reject('E_DSH_SCHEMA')
+    # status 只作为有界进度；阶段值所在原生键尚未确认，不搜索或猜测 phase/stage。
     return kind
 
 
@@ -228,7 +247,7 @@ class DshOfflineAdapter:
     def parse(self, record: object) -> Result:
         try:
             _context(record)
-            session_id, final_kind = None, None
+            session_id, final_kind, terminal_code = None, None, None
             errors, budget = [], [0]
             for index, line in enumerate(_lines(record.ndjson)):
                 try:
@@ -253,9 +272,19 @@ class DshOfflineAdapter:
                     errors.append(index)
                 if kind == 'final':
                     final_kind = event['reason']['kind']
+                    if final_kind == 'error':
+                        terminal_code = event['reason']['error']['code']
             if final_kind is None:
                 _reject('E_DSH_FINAL_MISSING')
             signal = _code_signal(record.runner.code_evidence, errors)
+            if final_kind == 'error':
+                # 仅此精确路径的 MISSING_CREDENTIAL 已有失败路径证据；其它原生码不升级。
+                if terminal_code == 'MISSING_CREDENTIAL':
+                    if errors and signal != 'auth_failed':
+                        _reject('E_DSH_CONFLICT')
+                    signal = 'auth_failed'
+                else:
+                    signal = 'sdk_fault'
             if final_kind == 'completed' and errors:
                 _reject('E_DSH_CONFLICT')
             if final_kind == 'completed' and record.runner.exit_code == 0 and record.runner.os_signal is None:
