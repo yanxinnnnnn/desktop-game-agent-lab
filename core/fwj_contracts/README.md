@@ -51,8 +51,11 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core .venv-fwj/bin/python -m unittest disco
 - 时间采用带时区 RFC3339，最多六位小数，不接收闰秒；以真实时刻比较时区偏移。
   `expires_at = created_at + ttl_ms`，TTL 正整数毫秒，边界 `now == expires_at` 合法。
   建议 3000–5000ms 不是强制范围。序号及版本允许从 0 开始，拒绝负值。
-- 场景、任务字段缺失用 null，confidence=unknown；`quest` 对象始终存在，
-  不使用空字符串冒充读到了任务。`dialog=null` 表示没有可表示的对话。
+- 场景字段缺失用 null，confidence=unknown。`quest` 对象始终存在，
+  **quest.confidence 只描述本帧 objective_text 的证据**；quest_id、title、target_name
+  各自独立可为 null，不会使可读的目标文案降级，也不能用它们替代目标文案作为阶段证据。
+  objective_text=null 强制 confidence=unknown，不使用空字符串冒充读到了任务。
+  `dialog=null` 表示没有可表示的对话。
   `screenshot.local_ref` 可选且可为 null；示例不存本机路径，也不得把实际本地引用提交。
 - 选项是唯一字符串列表；region/window.rect 是物理像素 `{x,y,w,h}`，
   坐标可负，宽高必须正。interactables 的 semantic_id、panels 的 name 不可重复。
@@ -89,11 +92,22 @@ result = validate_observation(observation)  # JSON 解析后的 dict
 - `validate_observation_pair(before, after)`：相邻采集恰好 +1，新 ULID，时间不倒退。
 - `validate_revision(before_state, after_state, before_observation, after_observation)`：
   对调用方已采纳的候选状态进行版本检查，不生成下一状态。每帧推进 observation_seq；
-  stage/objective.text/ui_mode/面板集合/dialog.text_hash/选项集合/interactable 的语义 ID 或
-  label/flag 值或证据发生变化才 revision+1，一帧多字段变化也只 +1。
-  位置、截图哈希、观察引用、集合顺序变化不增加语义版本。
+  stage/stage_source/objective.text/objective.evidence/ui_mode/面板集合/dialog.text_hash/
+  选项集合/interactable 的语义 ID 或 label/flag 值或证据/pending_decision/open_questions
+  发生语义变化才 revision+1，一帧多字段变化也只 +1。
+  这按 PR #13 CTO Review B2 补足原设计 §6.1 的证据及操作资格语义，不新增状态回放。
+  pending_decision 的新增、删除及任意内容变化均计入（包括问题、选项顺序、risk）；
+  对象键顺序不计入。open_questions 当前没有操作资格分类，故保守地将所有问题的
+  新增、删除、文本变化视为操作资格变化，按集合比较，单纯重排不计入。
+  证据降级、出现人工决策或未决问题变化都会使旧 state_revision 的 intent 返回
+  E_STALE_INTENT；同 stage 可以变化 revision；重复截图且全部语义相同则不增加。
+  位置、截图哈希、观察引用，以及上述按集合比较字段的顺序变化不增加语义版本。
   任务追踪 unknown 时 stage 保持，来源降为 inferred（原 stage=unknown 则保持 unknown），
   open_questions 保留不确定项；不会把推断升级为 observed。
+  observed 阶段和阶段迁移必须引用本帧 confidence=observed 的 objective_text，
+  TaskState.objective.text 须与该文案一致且 objective.evidence=observed；迁移后的
+  stage_source 必须为 observed。目标文案到阶段名称的语义映射仍由未来解析器提供，
+  M1 不解析任务、不硬编码阶段枚举；元数据缺失不会阻止合法的 observed 迁移。
 - `make_intent_id(session_id, attempt_no, kind, semantic_id, observation_id)`：
   SHA-256(UTF-8 紧凑 JSON 数组)，`ensure_ascii=False`，字段顺序如参数顺序。
   不使用拼接分隔符，避免歧义。attempt_no 独立于 revision，重复目标允许新尝试。

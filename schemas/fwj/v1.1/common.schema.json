@@ -269,7 +269,8 @@
             "observed",
             "inferred",
             "unknown"
-          ]
+          ],
+          "description": "阶段判定依据为本帧 objective_text；observed 不要求 quest_id、title 或 target_name 完整。"
         }
       },
       "required": [
@@ -281,44 +282,6 @@
       ],
       "additionalProperties": false,
       "allOf": [
-        {
-          "if": {
-            "properties": {
-              "quest_id": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "quest_id"
-            ]
-          },
-          "then": {
-            "properties": {
-              "confidence": {
-                "const": "unknown"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "title": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "title"
-            ]
-          },
-          "then": {
-            "properties": {
-              "confidence": {
-                "const": "unknown"
-              }
-            }
-          }
-        },
         {
           "if": {
             "properties": {
@@ -337,27 +300,9 @@
               }
             }
           }
-        },
-        {
-          "if": {
-            "properties": {
-              "target_name": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "target_name"
-            ]
-          },
-          "then": {
-            "properties": {
-              "confidence": {
-                "const": "unknown"
-              }
-            }
-          }
         }
-      ]
+      ],
+      "description": "confidence 仅表示 objective_text 的证据等级；其他字段独立可为 null，不构成阶段证据。"
     },
     "dialog": {
       "type": "object",

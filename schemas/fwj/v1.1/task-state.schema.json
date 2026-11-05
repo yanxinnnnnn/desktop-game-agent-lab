@@ -150,7 +150,8 @@
     },
     "revision": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "采纳的语义状态版本：stage/stage_source、objective 文案/证据、UI/对话/控件/flag、pending_decision 或 open_questions 集合内容变化时恰好 +1；重复观察不增加。跨帧一致性由 validate_revision 校验。"
     },
     "observation_seq": {
       "type": "integer",

@@ -224,6 +224,7 @@ class Contracts(unittest.TestCase):
                 obs['quest'].update(quest_id='synthetic-task', title='合成任务',
                                     objective_text='合成新阶段', target_name='合成 NPC', confidence='observed')
                 state['stage_source'] = 'observed'
+                state['objective'].update(text=obs['quest']['objective_text'], evidence='observed')
             self.assertCode(self.revision(obs, state), 'E_CONTRACT', '/revision')
             state['revision'] += 1
             self.assertOk(self.revision(obs, state))
@@ -371,6 +372,128 @@ class Contracts(unittest.TestCase):
         with patch.object(socket, 'socket', side_effect=AssertionError('Network forbidden')):
             self.assertOk(self.attempt())
             self.assertOk(validate_verification_result(self.verification))
+
+    def _observed_objective(self):
+        # B1/B2 均使用合成文案；任务元数据刻意保留 null。
+        self.obs['quest'].update(objective_text='合成目标：继续任务', confidence='observed')
+        self.guard['quest'] = deepcopy(self.obs['quest'])
+        self.state['objective'].update(text=self.obs['quest']['objective_text'], evidence='observed')
+
+    def test_b1_observed_objective_allows_missing_metadata_and_stage_migration(self):
+        self._observed_objective()
+        for title in (None, '合成任务标题'):
+            with self.subTest(title=title):
+                obs = deepcopy(self.guard)
+                obs['quest'].update(title=title, objective_text='合成目标：进入下一阶段')
+                self.assertIsNone(obs['quest']['quest_id'])
+                self.assertIsNone(obs['quest']['target_name'])
+                self.assertOk(validate_observation(obs))
+                after = deepcopy(self.state)
+                after.update(stage='synthetic-next-stage', stage_source='observed', revision=1)
+                after['objective'].update(text=obs['quest']['objective_text'], evidence='observed')
+                self.assertOk(self.revision(obs, after))
+
+    def test_b1_unreadable_objective_cannot_claim_observed_or_inferred_text(self):
+        for confidence in ('observed', 'inferred'):
+            obs = deepcopy(self.guard)
+            obs['quest'].update(quest_id='synthetic-id', title='合成标题',
+                                target_name='合成目标', confidence=confidence)
+            self.assertCode(validate_observation(obs), 'E_SCHEMA', '/quest/confidence')
+        self.assertOk(validate_observation(self.guard))
+        after = deepcopy(self.state)
+        after.update(stage='synthetic-next-stage', stage_source='observed', revision=1)
+        after['objective'].update(text='编造的目标', evidence='observed')
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/stage')
+
+    def test_b1_inferred_objective_cannot_establish_observed_stage(self):
+        self._observed_objective()
+        self.guard['quest']['confidence'] = 'inferred'
+        self.assertOk(validate_observation(self.guard))
+        after = deepcopy(self.state)
+        after.update(stage='synthetic-next-stage', stage_source='observed', revision=1)
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/stage_source')
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/stage')
+
+    def test_b1_observed_stage_must_cite_current_objective(self):
+        self._observed_objective()
+        for text, evidence in [('不同的合成文案', 'observed'),
+                               (self.guard['quest']['objective_text'], 'inferred')]:
+            after = deepcopy(self.state)
+            after.update(stage_source='observed', revision=1)
+            after['objective'].update(text=text, evidence=evidence)
+            self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/objective')
+
+    def test_b2_each_evidence_and_decision_change_requires_one_revision(self):
+        self._observed_objective()
+        decision = {'question': '是否选择合成奖励？', 'options': ['是', '否'], 'risk': 'irreversible'}
+        changes = [lambda s: s.update(stage_source='observed'),
+                   lambda s: s['objective'].update(evidence='inferred'),
+                   lambda s: s.update(pending_decision=deepcopy(decision)),
+                   lambda s: s['open_questions'].append('出现新的操作资格疑问')]
+        for change in changes:
+            after = deepcopy(self.state)
+            change(after)
+            with self.subTest(state=after):
+                self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
+                after['revision'] += 1
+                self.assertOk(self.revision(after_state=after))
+                self.assertEqual(after['stage'], self.state['stage'])
+                self.assertCode(self.attempt(state=after), 'E_STALE_INTENT', '/state_revision')
+
+    def test_b2_tracker_loss_downgrade_invalidates_old_intent(self):
+        self._observed_objective()
+        self.state.update(stage_source='observed', open_questions=[])
+        self.guard['quest'] = deepcopy(EXAMPLES['observation']['quest'])
+        after = deepcopy(self.state)
+        after.update(stage_source='inferred', open_questions=['任务文案不可读'])
+        after['objective']['evidence'] = 'inferred'
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
+        after['revision'] += 1
+        self.assertOk(self.revision(after_state=after))
+        # 阶段和重新解析的前置条件仍相同，旧 intent 只因状态版本变化而失效。
+        self.assertCode(self.attempt(state=after), 'E_STALE_INTENT', '/state_revision')
+
+    def test_b2_new_pending_decision_invalidates_old_intent(self):
+        after = deepcopy(self.state)
+        after['pending_decision'] = {'question': '批准合成选择？', 'options': ['选项 A'], 'risk': 'irreversible'}
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
+        after['revision'] += 1
+        self.assertOk(self.revision(after_state=after))
+        self.assertCode(self.attempt(state=after), 'E_STALE_INTENT', '/state_revision')
+
+    def test_b2_pending_decision_edit_and_removal_are_material(self):
+        self.state['pending_decision'] = {'question': '原合成问题', 'options': ['A'], 'risk': 'reversible'}
+        for decision in (None,
+                         {'question': '新合成问题', 'options': ['A'], 'risk': 'reversible'},
+                         {'question': '原合成问题', 'options': ['B'], 'risk': 'reversible'},
+                         {'question': '原合成问题', 'options': ['A'], 'risk': 'irreversible'}):
+            after = deepcopy(self.state)
+            after['pending_decision'] = decision
+            self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
+            after['revision'] += 1
+            self.assertOk(self.revision(after_state=after))
+
+    def test_b2_open_question_edit_removal_and_addition_invalidate_old_intent(self):
+        self._observed_objective()
+        for questions in ([], ['替换为另一合成疑问'], self.state['open_questions'] + ['新增合成疑问']):
+            after = deepcopy(self.state)
+            after['open_questions'] = questions
+            self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
+            after['revision'] += 1
+            self.assertOk(self.revision(after_state=after))
+            self.assertCode(self.attempt(state=after), 'E_STALE_INTENT', '/state_revision')
+
+    def test_b2_identical_repeat_and_question_reordering_preserve_revision(self):
+        self._observed_objective()
+        self.state.update(stage_source='observed', open_questions=['合成疑问 A', '合成疑问 B'],
+                          pending_decision={'question': '合成问题', 'options': ['A', 'B'], 'risk': 'irreversible'})
+        self.assertOk(self.revision())
+        after = deepcopy(self.state)
+        after['open_questions'].reverse()
+        after['pending_decision'] = dict(reversed(list(after['pending_decision'].items())))
+        self.assertOk(self.revision(after_state=after))
+        after['revision'] += 1
+        self.assertCode(self.revision(after_state=after), 'E_CONTRACT', '/revision')
 
 
 if __name__ == '__main__':

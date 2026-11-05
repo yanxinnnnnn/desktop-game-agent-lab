@@ -208,7 +208,11 @@ def validate_observation_pair(before, after):
 
 def _semantic(state, obs):
     dialog = obs['dialog'] or {}
-    return (state['stage'], state['objective']['text'], obs['ui_mode'],
+    # 证据与操作资格也是语义状态；未决问题按集合比较，保守地全部计入。
+    return (state['stage'], state['stage_source'],
+            state['objective']['text'], state['objective']['evidence'],
+            json.dumps(state['pending_decision'], sort_keys=True, ensure_ascii=False),
+            sorted(state['open_questions']), obs['ui_mode'],
             sorted(p['name'] for p in obs['panels']), dialog.get('text_hash'),
             sorted(dialog.get('options', [])),
             sorted((i['semantic_id'], i['label']) for i in obs['interactables']),
@@ -227,7 +231,18 @@ def validate_revision(before_state, after_state, before_observation, after_obser
         for state, obs in ((before_state, before_observation), (after_state, after_observation)):
             if state['observation_seq'] != obs['observation_seq']:
                 errors.append(_issue('/observation_seq', 'State must consume the corresponding capture'))
-        if after_observation['quest']['confidence'] == 'unknown':
+        quest = after_observation['quest']
+        observed_objective = quest['confidence'] == 'observed' and quest['objective_text'] is not None
+        if after_state['stage_source'] == 'observed':
+            if not observed_objective:
+                errors.append(_issue('/stage_source', 'Observed stage requires current observed objective_text'))
+            if (after_state['objective']['text'] != quest['objective_text'] or
+                    after_state['objective']['evidence'] != 'observed'):
+                errors.append(_issue('/objective', 'Observed stage must cite the current observed objective_text'))
+        if after_state['stage'] != before_state['stage']:
+            if not observed_objective or after_state['stage_source'] != 'observed':
+                errors.append(_issue('/stage', 'Stage migration requires current observed objective_text'))
+        if quest['confidence'] == 'unknown':
             if after_state['stage'] != before_state['stage']:
                 errors.append(_issue('/stage', 'Missing tracker cannot establish a new stage'))
             expected_source = 'unknown' if after_state['stage'] == 'unknown' else 'inferred'
