@@ -47,6 +47,9 @@ function Assert-ExperimentHome {
     $rootNorm = Resolve-NormalizedPath $ExpRoot
     if ($null -eq $rootNorm) { return Blk 'E_ROOT_INVALID' 'experiment root is invalid' }
 
+    $rootOk = Test-RootChain $rootNorm
+    if ($null -eq $rootOk) { return (Blk 'E_ROOT_ATTR_UNKNOWN' 'cannot read attributes on the experiment root chain') }
+    if ($rootOk -ne 'OK') { return (Blk $rootOk 'experiment root chain contains a reparse point') }
     $real = Resolve-NormalizedPath $RealHome
     if ($null -ne $real) {
         if ($norm -ieq $real) { return Blk 'E_HOME_IS_REAL_HOME' 'home path equals the real user home' }
@@ -133,4 +136,18 @@ function Assert-Manifest {
     if ($mRoot -ne $rRoot) { return Blk 'E_MANIFEST_ROOT_MISMATCH' 'manifest root differs from the requested root' }
 
     return (Assert-ExperimentHome -HomePath $Manifest.home -ExpRoot $ExpRoot -RealHome $RealHome)
+}
+
+function Test-RootChain {
+    param([string]$RootNorm)
+    $cursor = $RootNorm
+    while ($cursor) {
+        $r = Test-IsReparsePoint $cursor
+        if ($null -eq $r) { return $null }
+        if ($r) { return 'E_ROOT_REPARSE' }
+        $parent = Split-Path -Parent $cursor
+        if (-not $parent -or $parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+    return 'OK'
 }
