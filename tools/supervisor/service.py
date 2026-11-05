@@ -85,10 +85,10 @@ def _event(connection, event, now):
         event.get('category'), event.get('exit_code'), event.get('http_status'), now, _fingerprint(event)))
 
 
-def _prepare(connection, task, event_type, now):
+def _prepare(connection, task, event_type, now, *, origin_event_id=None):
     connection.execute('''INSERT INTO deliveries(event_id,task_id,attempt_no,event_type,status,next_try_at)
         VALUES (?,?,?,?,'PREPARED',?) ON CONFLICT(task_id,attempt_no,event_type) DO NOTHING''',
-        (task['event_id'], task['task_id'], task['attempt_no'], event_type, now))
+        (origin_event_id or task['event_id'], task['task_id'], task['attempt_no'], event_type, now))
 
 
 def _view(task, now):
@@ -260,7 +260,13 @@ class Supervisor:
             _event(connection, control, now)
             _update(connection, task)
             if deadline_exceeded:
-                _prepare(connection, task, 'BLOCKED_EXECUTION', now)
+                # 超窗是 operator 记账动作，但告警来源仍是最初触发退避的失败事件。
+                origin = connection.execute('''SELECT event_id FROM events WHERE task_id=? AND
+                    attempt_no=? AND kind='finished' AND category=? ORDER BY rowid LIMIT 1''',
+                    (task_id, task['attempt_no'], task['error_category'])).fetchone()
+                if origin is None:
+                    raise sqlite3.DatabaseError('Missing retry origin')
+                _prepare(connection, task, 'BLOCKED_EXECUTION', now, origin_event_id=origin[0])
                 return _result('E_RETRY_DEADLINE', '重试窗口已过；任务阻塞并准备人工告警。', _view(task, now))
             return _result(data=_view(task, now))
 
@@ -270,8 +276,6 @@ class Supervisor:
             return _result('E_DISABLED', '通知默认关闭；不会读取 SendKey 或访问网络。')
         if not _uuid(task_id):
             return _result('E_TASK_INVALID', '任务 ID 必须为 UUID4。')
-        if self._sender is None:
-            return _result('E_NOTIFIER_UNAVAILABLE', '未提供通知发送器；保留待处理告警。')
         now = self._now()
         with self._store.transaction() as connection:
             task = _task(connection, task_id)
@@ -282,6 +286,21 @@ class Supervisor:
             if row is None:
                 return _result('E_NO_ALERT', '当前尝试没有准备好的人工告警。')
             delivery = _journal('deliveries', row)
+            # 必须检查创建该投递项的事件，不能用可能已变化的 task.event_id 替代。
+            origin_row = connection.execute('SELECT * FROM events WHERE event_id=?',
+                                            (delivery['event_id'],)).fetchone()
+            if origin_row is None:
+                raise sqlite3.DatabaseError('Missing delivery origin')
+            origin = _journal('events', origin_row)
+            if (origin['task_id'], origin['attempt_no']) != (delivery['task_id'], delivery['attempt_no']):
+                raise sqlite3.DatabaseError('Invalid delivery origin correlation')
+            if origin['source'] == 'synthetic':
+                return _result('E_SYNTHETIC_DELIVERY', '合成事件仅供离线使用；禁止预留或发送通知。')
+            if origin['source'] != 'adapter':
+                # 旧版本 operator 派生告警没有明确的外部来源；不重标、不自动迁移放行。
+                return _result('E_DELIVERY_PROVENANCE', '投递缺少明确的 adapter 来源；保留账本，不发送。')
+            if self._sender is None:
+                return _result('E_NOTIFIER_UNAVAILABLE', '未提供通知发送器；保留待处理告警。')
             if delivery['status'] != 'PREPARED':
                 return _result('E_DELIVERY_FINAL', '投递已提交或状态不确定；禁止自动重发。', delivery)
             if now < delivery['next_try_at']:

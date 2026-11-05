@@ -1,4 +1,4 @@
-"""合成事件/临时数据库/假时钟/Mock 网络；不运行 Agent 或读取真实凭据。"""
+"""合成事件及可信 Mock adapter 夹具；临时数据库/假时钟/Mock 网络，无真实客户端或凭据。"""
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout, redirect_stderr
@@ -44,21 +44,26 @@ class SupervisorTests(unittest.TestCase):
     def restart(self, sender=True):
         return Supervisor(self.base, clock=self.clock, sender=self.sender if sender else None)
 
-    def event(self, kind='finished', **changes):
+    def event(self, kind='finished', *, source='synthetic', **changes):
         event = dict(schema_version='1.0', task_id=_TASK, event_id=str(uuid4()), attempt_no=0,
-                     agent='codex', issue_url=_URL, source='synthetic', kind=kind,
+                     agent='codex', issue_url=_URL, source=source, kind=kind,
                      exit_code=1 if kind == 'finished' else None, http_status=None,
                      signal='none', retry_after_seconds=None, resume_token=None)
         return event | changes
 
-    def start(self, attempt_no=0):
-        return self.supervisor.ingest(self.event('started', attempt_no=attempt_no))
+    def start(self, attempt_no=0, *, source='synthetic'):
+        return self.supervisor.ingest(self.event('started', attempt_no=attempt_no, source=source))
 
-    def block(self, signal='quota_exhausted'):
-        self.assertOk(self.start())
-        event = self.event(signal=signal)
+    def block(self, signal='quota_exhausted', *, source='synthetic'):
+        self.assertOk(self.start(source=source))
+        event = self.event(signal=signal, source=source)
         self.assertOk(self.supervisor.ingest(event))
         return event
+
+    def adapter_block(self):
+        # 新建可信 Mock adapter 契约夹具；不复制、改写或重标已保存的 synthetic 事件。
+        # source=adapter 不是实际客户端已验证来源的声明，所有数据仍为测试生成。
+        return self.block(source='adapter')
 
     def current(self):
         return self.supervisor.status(_TASK)['Data']['tasks'][0]
@@ -232,14 +237,14 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(self.supervisor.status(other)['Data']['tasks'][0]['state'], 'WAITING_FOUNDER')
 
     def test_notification_opt_in_and_sender_absence(self):
-        self.block()
+        self.adapter_block()
         self.assertCode(self.supervisor.notify(_TASK), 'E_DISABLED')
         self.assertCode(self.restart(sender=False).notify(_TASK, enabled=True), 'E_NOTIFIER_UNAVAILABLE')
         self.assertEqual(self.deliveries()[0]['status'], 'PREPARED')
         self.sender.send.assert_not_called()
 
     def test_notification_acceptance_and_durable_dedup(self):
-        event = self.block()
+        event = self.adapter_block()
         result = self.supervisor.notify(_TASK, enabled=True)
         self.assertOk(result)
         self.assertTrue(result['Data']['api_accepted'])
@@ -253,7 +258,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sent['agent'], 'codex')
 
     def test_notification_timeout_is_uncertain_never_retried(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.return_value = {'Ok': False, 'Code': 'E_TIMEOUT', 'Message': _CANARY, 'Data': None}
         self.assertCode(self.supervisor.notify(_TASK, enabled=True), 'E_NOTIFICATION_UNCERTAIN')
         self.assertEqual(self.deliveries()[0]['status'], 'UNKNOWN')
@@ -262,7 +267,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertNotIn(_CANARY.encode(), (self.base / 'supervisor.sqlite3').read_bytes())
 
     def test_crash_after_reservation_does_not_resend_on_restart(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.side_effect = SystemExit(99)
         with self.assertRaises(SystemExit):
             self.supervisor.notify(_TASK, enabled=True)
@@ -271,14 +276,14 @@ class SupervisorTests(unittest.TestCase):
         self.sender.send.assert_called_once()
 
     def test_concurrent_supervisors_claim_delivery_only_once(self):
-        self.block()
+        self.adapter_block()
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(lambda _: self.restart().notify(_TASK, enabled=True), range(2)))
         self.assertEqual(sum(r['Ok'] for r in results), 1)
         self.sender.send.assert_called_once()
 
     def test_missing_credentials_preflight_has_bounded_delayed_retries(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.return_value = {'Ok': False, 'Code': 'E_CREDENTIAL_MISSING', 'Message': _CANARY, 'Data': None}
         for count in range(3):
             expected = 'E_NOTIFICATION_DEFERRED' if count < 2 else 'E_NOTIFICATION_FAILED'
@@ -290,13 +295,13 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.sender.send.call_count, 3)
 
     def test_unexpected_sender_failure_is_sanitized(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.side_effect = RuntimeError(_CANARY)
         self.assertCode(self.supervisor.notify(_TASK, enabled=True), 'E_NOTIFICATION_UNCERTAIN')
         self.assertEqual(self.deliveries()[0]['status'], 'UNKNOWN')
 
     def test_real_m01_sender_is_consumed_with_mock_http_only(self):
-        self.block()
+        self.adapter_block()
         response = MagicMock(status=200)
         response.read.return_value = b'{"code":0}'
         with patch.object(os, 'environ', {'SERVERCHAN_SENDKEY': _CANARY}), \
@@ -367,7 +372,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertNotIn(_CANARY, output.getvalue())
 
     def test_provider_rejection_is_final_not_automatically_retried(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.return_value = {'Ok': False, 'Code': 'E_PROVIDER', 'Message': _CANARY}
         self.assertCode(self.supervisor.notify(_TASK, enabled=True), 'E_NOTIFICATION_FAILED')
         self.assertEqual(self.deliveries()[0]['status'], 'FAILED')
@@ -375,7 +380,7 @@ class SupervisorTests(unittest.TestCase):
         self.sender.send.assert_called_once()
 
     def test_sender_cannot_claim_wechat_receipt(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.return_value['Data']['wechat_receipt_confirmed'] = True
         result = self.supervisor.notify(_TASK, enabled=True)
         self.assertOk(result)
@@ -383,7 +388,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.deliveries()[0]['wechat_receipt_confirmed'], 0)
 
     def test_database_write_failure_after_send_preserves_reservation(self):
-        self.block()
+        self.adapter_block()
         original = self.supervisor._store.transaction
         def fail_after_send(*args, **kwargs):
             if self.sender.send.called:
@@ -432,7 +437,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.check()['Data']['events'], [])
 
     def test_cli_explicit_notify_uses_injected_mock_sender(self):
-        self.block()
+        self.adapter_block()
         output = io.StringIO()
         args = ['supervisor', '--base-dir', str(self.base), 'notify', '--task-id', _TASK,
                 '--enable-notifications']
@@ -449,10 +454,111 @@ class SupervisorTests(unittest.TestCase):
         self.assertCode(self.supervisor.check(), 'E_DB_INVALID')
 
     def test_malformed_sender_result_is_uncertain(self):
-        self.block()
+        self.adapter_block()
         self.sender.send.return_value = {'Ok': False, 'Code': [_CANARY], 'Message': _CANARY}
         self.assertCode(self.supervisor.notify(_TASK, enabled=True), 'E_NOTIFICATION_UNCERTAIN')
         self.assertEqual(self.deliveries()[0]['status'], 'UNKNOWN')
+
+    def test_b1_synthetic_rejected_before_sender_or_credentials_across_restart(self):
+        event = self.block()
+        before = self.supervisor.check()['Data']
+        # 提供真正的 M0.1 实例，但禁止调用其 send 或读取任何凭据。
+        with patch.object(os, 'environ', MagicMock(get=MagicMock(side_effect=AssertionError('No credential reads')))), \
+                patch.object(NotificationSender, 'send') as send:
+            for supervisor in (self.supervisor,
+                               Supervisor(self.base, clock=self.clock, sender=NotificationSender()),
+                               self.restart(sender=False)):
+                self.assertCode(supervisor.notify(_TASK, enabled=True), 'E_SYNTHETIC_DELIVERY')
+                self.assertEqual(supervisor.check()['Data'], before)
+            send.assert_not_called()
+        self.sender.send.assert_not_called()
+        self.assertEqual(self.deliveries()[0]['reservations'], 0)
+        origin = next(row for row in before['events'] if row['event_id'] == event['event_id'])
+        self.assertEqual(origin['source'], 'synthetic')
+
+    def test_b1_synthetic_origin_not_overridden_by_latest_adapter_event(self):
+        origin = self.block()
+        latest = self.event(source='adapter', signal='quota_exhausted')
+        self.assertOk(self.supervisor.ingest(latest))
+        self.assertEqual(self.current()['event_id'], latest['event_id'])
+        self.assertEqual(self.deliveries()[0]['event_id'], origin['event_id'])
+        before = self.supervisor.check()['Data']
+        self.assertCode(self.restart().notify(_TASK, enabled=True), 'E_SYNTHETIC_DELIVERY')
+        self.assertEqual(self.supervisor.check()['Data'], before)
+        self.sender.send.assert_not_called()
+
+    def test_b1_adapter_origin_stays_eligible_after_latest_synthetic_event(self):
+        origin = self.adapter_block()
+        latest = self.event(signal='quota_exhausted')
+        self.assertOk(self.supervisor.ingest(latest))
+        self.assertEqual(self.current()['event_id'], latest['event_id'])
+        self.assertEqual(self.deliveries()[0]['event_id'], origin['event_id'])
+        self.assertOk(self.restart().notify(_TASK, enabled=True))
+        self.sender.send.assert_called_once()
+        self.assertEqual(self.sender.send.call_args.args[0]['event_id'], origin['event_id'])
+        events = {row['event_id']: row for row in self.supervisor.check()['Data']['events']}
+        self.assertEqual(events[origin['event_id']]['source'], 'adapter')
+        self.assertEqual(events[latest['event_id']]['source'], 'synthetic')
+
+    def test_b1_cli_simulate_cannot_send_even_with_opt_in(self):
+        output = io.StringIO()
+        with patch('sys.argv', ['supervisor', '--base-dir', str(self.base), 'simulate', '--case', 'quota']), \
+                redirect_stdout(output):
+            self.assertEqual(cli._main(), 0)
+        task_id = json.loads(output.getvalue())['Data']['task_id']
+        before = self.supervisor.check(task_id)['Data']
+        output = io.StringIO()
+        with patch('sys.argv', ['supervisor', '--base-dir', str(self.base), 'notify', '--task-id', task_id,
+                                '--enable-notifications']), redirect_stdout(output), \
+                patch('tools.supervisor.__main__.NotificationSender', return_value=self.sender):
+            self.assertEqual(cli._main(), 1)
+        self.assertEqual(json.loads(output.getvalue())['Code'], 'E_SYNTHETIC_DELIVERY')
+        self.assertEqual(self.restart().check(task_id)['Data'], before)
+        self.sender.send.assert_not_called()
+
+    def test_b1_synthetic_retry_deadline_alert_keeps_original_source(self):
+        self.assertOk(self.start())
+        failed = self.event(signal='timeout')
+        self.assertOk(self.supervisor.ingest(failed))
+        self.clock.return_value = 5000
+        self.assertCode(self.supervisor.resume(_TASK), 'E_RETRY_DEADLINE')
+        self.assertNotEqual(self.current()['event_id'], failed['event_id'])
+        self.assertEqual(self.deliveries()[0]['event_id'], failed['event_id'])
+        before = self.supervisor.check()['Data']
+        self.assertCode(self.restart().notify(_TASK, enabled=True), 'E_SYNTHETIC_DELIVERY')
+        self.assertEqual(self.supervisor.check()['Data'], before)
+        self.sender.send.assert_not_called()
+
+    def test_b1_adapter_retry_deadline_alert_uses_original_source(self):
+        self.assertOk(self.start(source='adapter'))
+        failed = self.event(source='adapter', signal='timeout')
+        self.assertOk(self.supervisor.ingest(failed))
+        self.clock.return_value = 5000
+        self.assertCode(self.supervisor.resume(_TASK), 'E_RETRY_DEADLINE')
+        self.assertEqual(self.deliveries()[0]['event_id'], failed['event_id'])
+        self.assertOk(self.supervisor.notify(_TASK, enabled=True))
+        self.assertEqual(self.sender.send.call_args.args[0]['event_id'], failed['event_id'])
+
+    def test_b1_legacy_operator_origin_is_not_automatically_relabelled(self):
+        self.assertOk(self.start())
+        self.assertOk(self.supervisor.ingest(self.event(signal='timeout')))
+        self.clock.return_value = 5000
+        self.assertCode(self.supervisor.resume(_TASK), 'E_RETRY_DEADLINE')
+        # 仅模拟旧版本的 operator-linked 表结构；不修改任何事件来源。
+        with sqlite3.connect(self.base / 'supervisor.sqlite3') as connection:
+            connection.execute('UPDATE deliveries SET event_id=?', (self.current()['event_id'],))
+        before = self.supervisor.check()['Data']
+        self.assertCode(self.restart().notify(_TASK, enabled=True), 'E_DELIVERY_PROVENANCE')
+        self.assertEqual(self.supervisor.check()['Data'], before)
+        self.sender.send.assert_not_called()
+
+    def test_b1_existing_synthetic_source_cannot_be_relabelled(self):
+        event = self.block()
+        before = self.supervisor.check()['Data']
+        self.assertCode(self.supervisor.ingest(event | {'source': 'adapter'}), 'E_EVENT_CONFLICT')
+        self.assertEqual(self.supervisor.check()['Data'], before)
+        self.assertCode(self.supervisor.notify(_TASK, enabled=True), 'E_SYNTHETIC_DELIVERY')
+        self.sender.send.assert_not_called()
 
 
 if __name__ == '__main__':

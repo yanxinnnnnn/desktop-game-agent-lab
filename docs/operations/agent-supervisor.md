@@ -37,6 +37,7 @@ py -3.11 -m tools.supervisor --base-dir "$env:LOCALAPPDATA\DesktopGameAgentLab\S
 
 `simulate` 新建一个明确标记 synthetic 的任务和事件，可选 quota/rate-limit/auth/timeout/
 unknown/success/founder-merge/founder-game；只记账、准备告警，不发送、不运行客户端。
+这些事件准备的告警即使之后显式启用 notify，也以 E_SYNTHETIC_DELIVERY 拒绝，不能进入微信通道。
 `status` 显示任务和 `resume_ready`；`check` 在同一事务内读取任务、脱敏事件和投递账本，
 不会自动消耗到期的重试或发送通知。首次使用空目录会初始化数据库，不扫描其他本地文件。
 
@@ -85,6 +86,8 @@ founder_game_action_required。非 finished 的退出/HTTP/Retry-After 必须 nu
 category 由校验器计算；若传入该字段，必须与重新计算结果完全一致。
 原始日志、provider message、stdout/stderr、用户名、路径、prompt、headers 和额外字段一律拒绝，
 不写入数据库，也不在失败结果中回显。未知原文不能靠字符串搜索猜测额度。
+source=adapter 仍是可信调用者的来源断言，并非客户端身份认证；真实可信适配器留给 M0.2b。
+不得把 simulate 记录改标为 adapter 来发送；同一事件 ID 改 source 会作为冲突拒绝，不改写原记录。
 
 | 确定信号 | category | 状态/策略 |
 |---|---|---|
@@ -150,7 +153,13 @@ FOUNDER_MERGE_REQUIRED/FOUNDER_GAME_ACTION_REQUIRED。人工恢复会取消旧�
 
 投递步骤是：
 
-1. 事务内将 PREPARED 改为 RESERVED 并提交，再调用 M0.1。
+1. 同一 SQLite 事务内读取并校验 **delivery.event_id 所关联的原始 events 行**及任务/尝试相关性，
+   不使用可能已变化的 TaskState 最近 event_id。source=synthetic 返回 E_SYNTHETIC_DELIVERY，
+   不读取 SendKey、不调用 Sender.send、不改 status/reservations/next_try_at 或其他投递账本字段。
+   此限制跨重启生效，对 Mock sender 同样生效，没有“允许 synthetic 发送”的生产或测试开关。
+   source=adapter 才可继续预留；旧版本来源为 operator、无法直接确认原始输入的投递项以
+   E_DELIVERY_PROVENANCE 拒绝，不自动迁移或重标。退避超窗的新派生告警绑定最初失败事件，
+   operator 的记账动作不会遮蔽 synthetic 来源。校验通过后才 PREPARED→RESERVED 并提交，再调用 M0.1。
 2. code=OK 且 provider_accepted=true → ACCEPTED；微信确认仍为 false。
 3. 超时、传输/未知异常或进程崩溃 → UNKNOWN 或保留 RESERVED，禁止重启后盲目重发。
 4. 明确 provider/HTTP 拒绝 → FAILED，无自动 HTTP 重试。
@@ -195,6 +204,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/notifications -v
 
 测试使用 TemporaryDirectory/临时数据库、假时钟、合成 UUID/事件、Mock sender/HTTP，
 禁用 socket 与子进程；真实 M0.1 联测也只使用明确的假 key，替换环境映射以免读取真实值。
+发送分支测试从头创建明确标记为 adapter 的可信 Mock 契约夹具，不改写已有 synthetic 记录，
+也不把测试生成的数据称为实际客户端观测；另有独立回归验证 synthetic 在显式启用、重启、
+最近事件来源变化和超窗派生告警时均被拒绝，且不读取凭据、不调用 sender、不改变投递账本。
 没有 GitHub/Server酱/模型网络请求。SQLite 并发测试验证抢占和原子回滚；Windows 上如
 未授权 symlink，相关平台用例明确 SKIP，不请求提权。缺解释器须报告 SKIP，零测试不算通过。
 本次 Linux 测试不能替代 Windows 客户端与文件系统集成验收。
