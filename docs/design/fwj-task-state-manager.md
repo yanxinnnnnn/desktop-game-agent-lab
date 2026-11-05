@@ -1,4 +1,4 @@
-# 梦幻西游任务状态管理器 — 架构设计（Issue #7）
+﻿# 梦幻西游任务状态管理器 — 架构设计（Issue #7）
 
 | 项目 | 内容 |
 |---|---|
@@ -164,16 +164,17 @@
 | `proposed_by` | enum | `planner` / `operator` |
 | `kind` | enum | `click_semantic` / `key` / `hover_probe` |
 | `target` | object | `{semantic_id, label}` |
-| `resolved_point` | object | `{x, y}`，**属于 `origin_observation` 的坐标空间** |
-| **`origin_observation`** | object | `{observation_id, observation_seq, captured_at, window:{hwnd,pid,rect}}` |
+| `resolved_point` | object | `{x, y}`，属于 `origin_observation` 的坐标空间；**执行前必须以 guard 帧重新解析**，不复用旧坐标 |
+| **`origin_observation`** | object | `{observation_id, observation_seq, captured_at, window:{hwnd, pid, title_hash, rect}}` |
 | `key` | string? | 如 `Tab`、`Alt+P` |
 | `preconditions` | array | 不可变断言列表（见 §6.3） |
 | `expected_postcondition` | object | 可判定期望，如 `{type:"dialog_text_changed"}` |
 | `risk` | enum | `reversible` / `irreversible` |
 | `requires_human_approval` | bool | 不可逆必须 true |
-| `created_at` | ISO8601 | — |
-| `ttl_ms` | int | 生存期；`expires_at = created_at + ttl_ms` |
-| `state_revision` | int | 生成时的状态版本（仅用于审计） |
+| `created_at` | ISO8601 | 提议时刻 |
+| `expires_at` | ISO8601 | **显式字段**：`created_at + ttl_ms`；Guard 必须校验 `now <= expires_at` |
+| `ttl_ms` | int | 生存期上限（建议 3000–5000 ms，需按实测 UI 响应调整） |
+| `state_revision` | int | 生成时的 `TaskState.revision`；**Guard 强制校验其等于当前值**，不等即 `E_STALE_INTENT` |
 
 ### 5.4 `VerificationResult`
 
@@ -207,8 +208,19 @@
 ### 6.1 什么算一次 `revision` 更新
 
 `revision +1` 当且仅当以下任一字段的**语义值**发生变化且被采纳：
-`stage`、`objective.text`、`ui_mode`、`panels` 集合、`dialog.text_hash`、`dialog.options` 集合、
-`flags.*` 的证据等级或取值。
+
+| 字段 | 变化判定 |
+|---|---|
+| `stage` | 阶段标识改变 |
+| `objective.text` | 任务文案改变 |
+| `ui_mode` | 世界 / 对话 / 面板 / 弹窗切换 |
+| `panels` | 面板集合增删 |
+| `dialog.text_hash` | 对话正文改变（**同一句重复观察不算**） |
+| `dialog.options` | 选项集合改变 |
+| `interactables` | 语义控件集合增删，或某条目 `semantic_id` / `label` 改变（**tooltip 学习属于此类**） |
+| `flags.*` | 取值或证据等级改变 |
+
+**不**因为"又截了一张图"而 +1：观察序号 `observation_seq` 负责逐帧记录，`revision` 只记录语义变化。
 
 **因此**：对话每推进一句（`dialog.text_hash` 变化）→ `revision +1`，但 `stage` 不变。
 连续 4 次"点击继续"会产生 4 次 revision，**不会被误判为卡住**。
@@ -221,18 +233,36 @@
 
 > 旧设计用 `(state_revision, semantic_id, kind)` 作键，会在同一 revision 内把第二次"继续"吃掉——已废弃。
 
-### 6.3 执行前置校验（Guard 必做）
+### 6.3 执行前校验（Guard 必做，顺序不可调换）
 
-在把 intent 交给 Executor **之前**，重新取一次窗口信息，逐条校验：
+Guard 的流程固定为 A→B→C→D；任何一步不通过都返回 `E_STALE_INTENT` 并**丢弃本次尝试**（不重试原 intent，重新规划）。
 
-1. `window.hwnd`、`pid` 与 `origin_observation.window` 一致；
-2. 窗口矩形与 `origin_observation.window.rect` 的偏移在容差内（默认 ≤ 2px）；
-3. `now <= expires_at`；
-4. 当前 `observation_seq` 与 `origin_observation.observation_seq` 之间**没有未消化的新观察**；
-5. `preconditions` 在当前帧仍成立（重新解析，不复用旧结果）；
-6. `risk=irreversible` 时存在人工批准记录。
+**Step A — 取一帧 guard-time 观察**
+Guard 必须**新截一帧**（得到 `observation_seq_guard`），不复用 intent 生成时的帧。
 
-任一条不满足 → 丢弃 intent，返回 `E_STALE_INTENT` 并重新观察，**不重试原 intent**。
+**Step B — 逐项比对**
+
+| # | 校验 | 不通过时 |
+|---|---|---|
+| 1 | `now <= intent.expires_at` | 过期 → 丢弃 |
+| 2 | `intent.state_revision == TaskState.revision` | 状态已变 → 丢弃（**强制项**） |
+| 3 | `window.hwnd`、`pid`、`title_hash` 与 `intent.origin_observation.window` 一致 | 窗口身份变化 → 丢弃 |
+| 4 | guard 帧的窗口矩形与 origin 的矩形**完全一致** | 窗口移动/缩放 → 丢弃并重新规划 |
+| 5 | guard 帧解析出的 `stage` 与生成 intent 时一致 | 阶段已变 → 丢弃 |
+| 6 | `preconditions` 在 guard 帧上重新解析后仍成立 | 前置条件失效 → 丢弃 |
+| 7 | `risk=irreversible` 时存在有效人工批准记录 | 无批准 → 拒绝 |
+
+**Step C — 坐标绑定**
+只有 Step B 全部通过后，才用 **guard 帧**重新解析目标坐标；`resolved_point` 必须以 guard 帧的坐标空间为准，**不得**沿用 origin 帧的坐标去点击。
+
+**Step D — 执行**
+Executor 收到的 intent 携带 `origin_observation = guard 帧`；回执写入 `executor_receipt`。
+
+> **关于窗口几何**：不做"2px 以内算安全"这类近似——不同 DPI 与 UI 布局下，同样的像素偏移含义不同。
+> 几何一变就直接丢弃重规划；这比"容差"更保守，也更容易解释。
+>
+> **关系链**：`新观察 → 身份/几何/阶段/前置条件/版本比对 → 绑定到新帧 → 执行`。
+> TTL 与 `state_revision` 只是这条链上的两道快速否决，**不能替代**对 guard 帧的重解析。
 
 ---
 

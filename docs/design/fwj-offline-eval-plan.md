@@ -95,23 +95,23 @@ JSONL，一行一条观察；字段与 `Observation` 同构，但**不含像素*
 |---|---|---|---|
 | **T1** | 阶段识别 | 三帧任务文案 ①②③ | 分别映射 `talk_to_envoy` / `set_pet_active` / `equip_gear`，`stage_source=observed` |
 | **T2** | 选项选择 | `ui_mode=dialog`，options=[主线任务, 我要做其他事情, 我点错了] | 生成 `click_semantic(主线任务)`，`risk=reversible`，后置条件为"对话文本变化" |
-| **T3** | 对话推进（修正） | 连续 4 帧仅 `dialog.text_hash` 变化 | **`revision` 每帧 +1**；**`stage` 保持不变**；不得判为"卡住"（旧版"revision 不变"已废弃） |
+| **T3** | 对话推进 | 连续 4 次对话推进，**每次 `dialog.text_hash` 变化**；中间夹 1 帧内容未变 | 每次 hash 变化 → `revision +1`；**内容未变的重复帧不 +1**；`stage` 全程不变；不得判为"卡住" |
 | **T4** | 不可逆门禁 | 出现 4 个初始召唤兽选项 | `pending_decision` 置位；未批准时 **不得产出可执行 intent** |
 | **T5** | 面板层级 | `panels=[宠物]` + 面板内「召唤兽」按钮 | 点击后期望 `panels` 含 `召唤兽属性`；仍只有「宠物」→ `rejected` |
 | **T6** | `pet_active` 分级（修正） | 三种输入：仅按钮变「休息」／按钮+血条／都不可见 | 分别 → `inferred` / `observed` / `unknown`；**不允许多证据缺失时标 observed** |
 | **T7** | 幂等（修正） | 同一 `intent_id` 提交两次；另一次**不同** `attempt_no` 的"继续"点击 | 第一次执行；同 id 第二次 `E_DUPLICATE_ATTEMPT`；不同 attempt 的点击**必须允许** |
-| **T13** | 15 步回放（修正） | POC-002 的 15 条观察 | 仅断言不变量：stage 在第 8、15 步迁移；`revision` 严格递增；`pet_active` 在第 13 步前非 observed；最终 `stage=equip_gear`。**不断言 revision 的具体数值** |
+| **T13** | 15 步回放 | POC-002 的 15 条观察 | 仅断言不变量：`stage` 只第 8、15 步迁移；`revision` 严格递增；**第 10 步 tooltip 学习（`interactables` 变化）计 1 次 revision**；`pet_active` 第 13 步前非 observed；最终 `stage=equip_gear`。**不断言 revision 的具体数值** |
 
 ### 4.2 合成异常场景（synthetic）
 
 | ID | 场景 | 期望 |
 |---|---|---|
-| **T8** | 关键字段 `unusable` | `ambiguous` → 停止（S4） |
+| **T8** | 关键字段不可用 | 第 1 帧 `unusable`，第 2 帧仍 `unusable` | 第 1 帧 → `ambiguous`、**不产出动作**、重新观察（**不停止**）；连续第 2 帧 → 停止（S4） |
 | **T9** | 未知弹窗 | 立即停止（S3），**不点击任何按钮** |
 | **T10** | 无进展（修正） | 连续 3 次尝试均未产生**期望的可观测进展** → 停止（S2）；**不以 revision 是否变化为判据** |
 | **T11** | 终帧无变化（修正，分两支） | (a) 区域清晰且后置条件明确为假 → `rejected`；(b) 区域被遮挡/低置信 → `ambiguous` |
 | **T12** | 窗口身份不符 | 停止（S7） |
-| **T14** | 陈旧 intent | 观察与执行之间窗口移动 → Guard 返回 `E_STALE_INTENT`，重新观察，**不重试原 intent** |
+| **T14** | 陈旧 intent（两子例） | (a) 观察与执行之间窗口移动；(b) 期间 `TaskState.revision` 已前进 | 两者均返回 `E_STALE_INTENT`，重新观察，**不重试原 intent** |
 | **T15** | 任务追踪缺失 | `stage` 保持不变、`stage_source=inferred`、写入 `open_questions`；**不得**把推断阶段标为 observed |
 
 ### 4.3 用例分布说明
@@ -156,10 +156,12 @@ JSONL，一行一条观察；字段与 `Observation` 同构，但**不含像素*
 
 ---
 
-## 8. 未决问题
+## 8. Q4–Q6：CTO 建议（记录，不阻塞本 PR）
 
-| # | 问题 | 影响 |
-|---|---|---|
-| Q4 | 逐张审核的具体标准（裁剪边界、允许保留的 UI 元素） | 决定 M3 fixture 是否合规 |
-| Q5 | 第二个任务选哪个（同城新手链 vs 完全不同任务） | 影响泛化结论的强度 |
-| Q6 | 标注冲突的仲裁规则（Founder 与 CTO 意见不一致时） | 影响 T1/T13 的可信度 |
+| # | 问题 | CTO 建议 | 落地要求 |
+|---|---|---|---|
+| Q4 | 裁剪与脱敏标准 | 裁剪到**最小任务 UI 区域**；抹除角色 / 用户 / 服务器 / 账号 / 机器标识；私有上传前**逐张检查**并经 Founder 批准 | 审核记录与 fixture 一并保存，可追溯 |
+| Q5 | 第二个任务 | 优先选**不同的交互模式**，而不是同一新手链里更多对话 | 在声称泛化前完成 |
+| Q6 | 标注冲突 | Founder 依可用证据做最终裁定；CTO 审一致性，未解决项记为 Unknown | 冲突记录保留，不强行归一 |
+
+> 以上为方向性建议，执行细节留待 M3/M4 的独立 Issue；本 PR 不因此扩大范围。
