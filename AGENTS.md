@@ -46,7 +46,9 @@ Issue（含验收标准） → 分支 → 实现 + 测试 → ready-for-review P
 
 | 项 | 值 |
 |---|---|
-| Shell | Windows PowerShell **5.1**（不是 pwsh 7） |
+| 主要开发 Shell（Windows） | **PowerShell 7.6.9（x64，LTS）**，新开发及日常离线测试默认使用 |
+| 兼容性验证 Shell | **Windows PowerShell 5.1**，现有脚本/引擎按需单独验证，不能以 pwsh 7 结果替代 |
+| 启动方式 | 优先显式调用 `$env:LOCALAPPDATA\Programs\PowerShell\7.6.9\pwsh.exe`；5.1 使用 `powershell.exe`，无需更改 PATH |
 | 依赖 | 仅 `System.Drawing` + `user32/dwmapi/kernel32/advapi32` |
 | 执行策略 | 验证机上为 `Restricted` —— **不要修改它**，用内存加载 |
 
@@ -56,6 +58,8 @@ $base = '<repo>\engine'
 . ([scriptblock]::Create((Get-Content "$base\Game2048.psm1" -Raw -Encoding UTF8)))
 . ([scriptblock]::Create((Get-Content "$base\Tests.ps1"   -Raw -Encoding UTF8)))
 ```
+
+**测试规范**：涉及 PowerShell 的变更，应在适用且可用的环境下分别测试 **7.6.9** 和 **5.1**，独立报告 PASS / FAIL / SKIP；未执行的版本须明确写为 NOT RUN。旧 POC 在 5.1 下的历史结果不能视为已在 7.6.9 复验。未经 Founder 授权，不得为了测试启动真实游戏、浏览器或 DSH，也不得修改执行策略、PATH 或其他系统设置。
 
 **编码陷阱**：PS 5.1 的 `Get-Content` 默认按 ANSI/GBK 读取。仓库内所有 `.ps1` / `.psm1` / `.md`
 均为 UTF-8，读取时必须显式 `-Encoding UTF8`，否则中文乱码并触发解析错误。
