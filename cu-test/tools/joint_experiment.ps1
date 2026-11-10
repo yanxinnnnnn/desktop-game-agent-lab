@@ -57,9 +57,6 @@ try {
         if (-not $g.Ok) { throw $g.Code }
         if ($Mode -eq 'dry') { Write-Output 'PREPARED_ONLY trust=synthetic-only'; $exitCode = 0; exit 0 }
     }
-    if (-not ('OfflineBoundedProcess' -as [type])) {
-        Add-Type -TypeDefinition (Get-Content -LiteralPath (Join-Path $tools 'bounded_process.cs') -Raw -Encoding UTF8)
-    }
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
@@ -86,18 +83,17 @@ try {
         }
         $pin = Join-Path $snapshotDir 'pin.json'
         [IO.File]::WriteAllText($pin, (@{ base_sha256 = $ExpectedBaseSha256 } | ConvertTo-Json))
-        $python = Get-Command python3,python,py -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $python) { throw 'E_PYTHON_MISSING' }
-        $psi.FileName = $python.Source
-        # 使用 EncodedCommand 调用 PowerShell 作为 stub；Python 参数通过标准转义传递。
-        $prefix = if ([IO.Path]::GetFileNameWithoutExtension($python.Source) -eq 'py') { '-3 -I ' } else { '-I ' }
+        . ([scriptblock]::Create((Get-Content -LiteralPath (Join-Path $tools 'python_runtime.ps1') -Raw -Encoding UTF8)))
+        $python = Resolve-OfflinePython -ToolsDir $tools -WorkingDirectory $exp
+        if (-not $python.Ok) { throw $python.Code }
+        $psi.FileName = $python.Data
         $argsList = @((Join-Path $tools 'no_tools_preflight.py'))
         foreach ($pair in @(@('base','base.yml'),@('profile','profile.yml'),@('home','home'),@('overlay','overlay.yml'),@('config','capabilities.json'),@('pinned','pin.json'))) {
             $argsList += '--' + $pair[0]; $argsList += Join-Path $snapshotDir $pair[1]
         }
         # 所有文件参数均为叶文件，不以反斜杠结尾；双引号路径不支持，fail-closed。
         foreach ($a in $argsList) { if ($a.Contains('"')) { throw 'E_ARGUMENT_PATH' } }
-        $psi.Arguments = $prefix + (($argsList | ForEach-Object { '"' + $_ + '"' }) -join ' ')
+        $psi.Arguments = '-I ' + (($argsList | ForEach-Object { '"' + $_ + '"' }) -join ' ')
         $proc = New-Object Diagnostics.Process; $proc.StartInfo = $psi
         if (-not $proc.Start()) { throw 'E_PREFLIGHT_START' }; $processStarted = $true
         $r = [OfflineBoundedProcess]::Wait($proc, 30000, 65536)
@@ -127,6 +123,9 @@ try {
         $path = Join-Path $exp $leaf
         $g = Assert-SafePath $path $exp -Optional
         if (-not $g.Ok) { throw 'E_STUB_OUTPUT_UNSAFE' }
+    }
+    if (-not ('OfflineBoundedProcess' -as [type])) {
+        Add-Type -TypeDefinition (Get-Content -LiteralPath (Join-Path $tools 'bounded_process.cs') -Raw -Encoding UTF8)
     }
     $psi.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $stub = Get-Content -LiteralPath (Join-Path $tools 'controlled_stub.ps1') -Raw -Encoding UTF8

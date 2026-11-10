@@ -5,18 +5,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 from test_no_tools_preflight import fixture
 
-ENGINE = os.environ.get('LAUNCHER_TEST_POWERSHELL') or shutil.which('powershell') or shutil.which('pwsh')
+ENGINE = None
 
 
 def quote(text):
@@ -27,8 +29,30 @@ def encoded(script):
     return base64.b64encode(script.encode('utf-16le')).decode('ascii')
 
 
-def command(script):
-    return [ENGINE, '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(script)]
+def command(script, engine=None):
+    return [engine or ENGINE, '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(script)]
+
+
+def resolve_engine(spec):
+    for name in (spec,) if spec is not None else ('powershell', 'pwsh'):
+        try:
+            path = Path(name)
+            if not path.is_absolute():
+                # 裸命令名沿用系统可执行文件搜索规则，显式文件路径必须为绝对路径。
+                found = shutil.which(name) if path.name == name else None
+                if not found:
+                    continue
+                path = Path(found)
+            if not path.is_absolute() or not path.is_file() or (os.name == 'nt' and path.suffix.lower() != '.exe'):
+                continue
+            script = "'OFFLINE_ENGINE=' + $PSVersionTable.PSVersion.Major + '.' + $PSVersionTable.PSVersion.Minor"
+            probe = subprocess.run(command(script, str(path)), capture_output=True, text=True, timeout=8)
+            version = re.fullmatch(r'OFFLINE_ENGINE=(\d+)\.(\d+)', probe.stdout.strip())
+            if probe.returncode == 0 and version and tuple(map(int, version.groups())) >= (5, 1):
+                return str(path)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue
+    return None
 
 
 class SyntheticCase(unittest.TestCase):
@@ -129,6 +153,72 @@ class GuardTests(SyntheticCase):
         if os.name != 'nt':
             self.skipTest('Windows case-insensitive filesystem comparison unavailable')
         self.assertTrue(self.home(str(self.root / 'dsh-home').upper())['Ok'])
+
+
+class RuntimeTests(SyntheticCase):
+    def resolve_python(self, prefixes):
+        # 候选使用真实子进程，模拟退出码、版本与挂起，不修改 PATH。
+        candidates = '; '.join(
+            '@{ Path = ' + quote(sys.executable) + '; Prefix = ' + quote(prefix) + ' }'
+            for prefix in prefixes
+        )
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            ". ([scriptblock]::Create((Get-Content -LiteralPath " + quote(TOOLS / 'python_runtime.ps1') + " -Raw -Encoding UTF8))); "
+            "function Get-OfflinePythonCandidates { " + candidates + " }; "
+            "Resolve-OfflinePython -ToolsDir " + quote(TOOLS) + " -WorkingDirectory " + quote(self.root) +
+            " | ConvertTo-Json -Compress"
+        )
+        probe = self.invoke_script(script)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        return json.loads(probe.stdout)
+
+    def test_python_valid_executable(self):
+        result = self.resolve_python([''])
+        self.assertTrue(result['Ok'])
+        self.assertTrue(Path(result['Data']).samefile(sys.executable))
+
+    def test_python_windowsapps_stub_exit_falls_back(self):
+        # WindowsApps 占位程序已观测返回 9009，模拟同样的退出行为。
+        result = self.resolve_python(['-I -S -B -c "import sys; sys.exit(9009)" ', ''])
+        self.assertTrue(result['Ok'])
+        self.assertTrue(Path(result['Data']).samefile(sys.executable))
+
+    def test_python_old_version_and_timeout_fall_back(self):
+        old = "-I -S -B -c \"import json, sys; print(json.dumps(dict(major=3, minor=9, path=sys.executable)))\" "
+        start = time.monotonic()
+        result = self.resolve_python([old, '-I -S -B -c "import time; time.sleep(30)" ', ''])
+        self.assertTrue(result['Ok'])
+        self.assertGreaterEqual(time.monotonic() - start, 2.5)
+        self.assertLess(time.monotonic() - start, 20)
+
+    def test_python_all_candidates_fail(self):
+        stub = '-I -S -B -c "import json, sys; print(json.dumps(dict(major=3, minor=13, path=sys.executable))); sys.exit(9009)" '
+        result = self.resolve_python([stub])
+        self.assertFalse(result['Ok'])
+        self.assertEqual(result['Code'], 'E_PYTHON_UNAVAILABLE')
+
+    def test_engine_absolute_and_command_name(self):
+        self.assertEqual(resolve_engine(ENGINE), ENGINE)
+        with mock.patch.object(shutil, 'which', return_value=ENGINE) as lookup:
+            self.assertEqual(resolve_engine('pwsh'), ENGINE)
+            lookup.assert_called_once_with('pwsh')
+
+    def test_engine_rejects_wrong_program_and_old_version(self):
+        self.assertIsNone(resolve_engine(sys.executable))
+        old = subprocess.CompletedProcess([], 0, 'OFFLINE_ENGINE=5.0\n', '')
+        with mock.patch.object(subprocess, 'run', return_value=old):
+            self.assertIsNone(resolve_engine(ENGINE))
+
+    def test_engine_unavailable_fails_once_before_tests(self):
+        probe = subprocess.run(
+            [sys.executable, '-I', __file__, '--powershell', str(self.root / 'missing-pwsh.exe')],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(probe.returncode, 2)
+        self.assertEqual(probe.stdout, '')
+        self.assertEqual(len(probe.stderr.splitlines()), 1)
+        self.assertIn('E_ENGINE_NOT_FOUND', probe.stderr)
 
 
 class IntegrationTests(SyntheticCase):
@@ -362,6 +452,18 @@ class IntegrationTests(SyntheticCase):
         self.blocked(self.phase('run'))
         self.assertEqual(list(self.root.glob('.preflight-*')), [])
 
+    def test_stale_success_python_unavailable(self):
+        self.ready()
+        tools = self.copied_tools()
+        with (tools / 'python_runtime.ps1').open('a', encoding='utf-8') as script:
+            script.write('\nfunction Get-OfflinePythonCandidates {}\n')
+        result = self.phase('preflight', tools=tools)
+        self.blocked(result)
+        self.assertIn('BLOCKED E_PYTHON_UNAVAILABLE', result.stdout)
+        self.assertFalse(self.manifest.exists())
+        self.assertEqual(list(self.root.glob('.preflight-*')), [])
+        self.blocked(self.phase('run'))
+
     def test_interrupted_preflight_and_concurrent_run(self):
         self.ready()
         tools = self.copied_tools()
@@ -436,9 +538,16 @@ if __name__ == '__main__':
     parser.add_argument('--powershell')
     parser.add_argument('--suite', choices=('guard', 'integration', 'all'), default='all')
     args = parser.parse_args()
-    if args.powershell:
-        ENGINE = args.powershell
-    classes = {'guard': [GuardTests], 'integration': [IntegrationTests], 'all': [GuardTests, IntegrationTests]}[args.suite]
+    spec = args.powershell if args.powershell is not None else os.environ.get('LAUNCHER_TEST_POWERSHELL')
+    ENGINE = resolve_engine(spec)
+    if ENGINE is None:
+        print('E_ENGINE_NOT_FOUND: pass an absolute PowerShell 5.1+ executable path with --powershell or use a command on PATH.', file=sys.stderr)
+        sys.exit(2)
+    classes = {
+        'guard': [RuntimeTests, GuardTests],
+        'integration': [IntegrationTests],
+        'all': [RuntimeTests, GuardTests, IntegrationTests],
+    }[args.suite]
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in classes)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     failures = len(result.failures) + len(result.errors)
