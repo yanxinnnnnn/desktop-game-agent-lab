@@ -17,8 +17,11 @@ engine/
 | 项 | 值 |
 |---|---|
 | OS | Windows 11（POC 验证机 26200） |
-| Shell | Windows PowerShell 5.1 |
+| 历史 POC 验证 Shell | Windows PowerShell 5.1（历史实测环境） |
+| 新开发默认 Shell | PowerShell 7.6.9（x64，LTS）；本引擎尚未据此声明 7.6.9 实机验证通过 |
 | 依赖 | 仅 `System.Drawing` + `user32/dwmapi/kernel32/advapi32`，无第三方包 |
+
+新代码开发可使用已安装的 PowerShell 7.6.9（`$env:LOCALAPPDATA\Programs\PowerShell\7.6.9\pwsh.exe`），但**本引擎的历史 POC 结论仍基于 Windows PowerShell 5.1**。涉及此引擎的修改须按适用范围分别记录 7.6.9 / 5.1 测试结果，不可把某一版本的 PASS 自动推广到另一版本；真实桌面操作仍需单独授权。
 
 ## ⚠️ 执行策略
 
