@@ -6,6 +6,23 @@ Windows 桌面游戏自动化的实验仓库：记录从"能不能看见"到"能
 > 本仓库当前处于 **baseline 导入阶段**：迁移 POC-001 ~ POC-005 的已验证成果，
 > **尚未包含**任何新的实现工作。下一步见 [docs/roadmap.md](docs/roadmap.md)。
 
+## Windows 开发环境
+
+从 2026-11-10 起，**PowerShell 7.6.9（x64，LTS）是 Windows 上的主要开发 Shell**。Windows PowerShell **5.1 继续保留**，用于现有引擎与脚本的兼容性验证；不能把在 7.6.9 下通过的测试视为已通过 5.1 验证。
+
+| 用途 | Shell | 启动方式 |
+|---|---|---|
+| 新功能开发与日常离线测试（默认） | PowerShell 7.6.9 | 显式启动下列已安装的 `pwsh.exe` |
+| 旧版兼容性验证 | Windows PowerShell 5.1 | `powershell.exe` |
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\PowerShell\7.6.9\pwsh.exe"
+# 验证当前 Shell
+$PSVersionTable.PSVersion.ToString()
+```
+
+7.6.9 与 Windows PowerShell 5.1 **并存**，上述方式不依赖修改 PATH。对于涉及 PowerShell 的代码变更，在适用时分别运行 7.6.9 与 5.1 的离线测试，并独立记录 PASS / FAIL / SKIP；未验证的平台不能声称已通过。历史 POC 的实测环境及限制以各自报告为准。安装 Shell 不代表授权运行真实游戏、浏览器、DSH 或其他实机实验。
+
 ## 这个仓库证明了什么
 
 | 结论 | 证据 |
