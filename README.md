@@ -107,3 +107,10 @@ $sb = [scriptblock]::Create((Get-Content "$env:CU_ENGINE_DIR\Run2048.ps1" -Raw -
 ## 许可
 
 内部实验仓库，暂未选择开源许可证。如需对外发布，请先与 Founder 确认。
+
+## DSH 离线预检工具（PR #25）
+
+[工具说明与测试边界](cu-test/M0-2B-LAUNCHER-ISOLATION-FIX.md)：
+**DSH Offline Preflight + Guarded Dry-run + Synthetic Stub Testing Toolkit**。
+仅支持 dry/stub，使用临时合成配置和固定受控替身；合成测试不构成真实 DSH 运行时隔离验证。
+真实 DSH 执行属于 Issue #23 后续独立授权阶段，本工具没有真实 DSH 启动路径。
