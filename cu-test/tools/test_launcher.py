@@ -149,6 +149,19 @@ class GuardTests(SyntheticCase):
         expr = "$e=New-Object Collections.Specialized.StringDictionary; $e['DSH_HOME']=" + quote(self.root / 'dsh-home') + '; Assert-ChildEnvironment $e ' + quote(self.root / 'dsh-home')
         self.assertTrue(self.guard(expr)['Ok'])
 
+    def test_env_rejects_host_and_credential_names_before_start(self):
+        home = quote(self.root / 'dsh-home')
+        for name in ('PATH', 'PATHEXT', 'PSModulePath', 'POWERSHELL_DISTRIBUTION_CHANNEL', 'SYNTHETIC_CREDENTIAL'):
+            with self.subTest(name=name):
+                expr = (
+                    "$e=New-Object Collections.Specialized.StringDictionary; "
+                    f"$e['DSH_HOME']={home}; $e['{name}']='dummy-only'; "
+                    f"Assert-ChildEnvironment $e {home}"
+                )
+                result = self.guard(expr)
+                self.assertFalse(result['Ok'])
+                self.assertEqual(result['Code'], 'E_ENV_NOT_ALLOWED')
+
     def test_windows_case_comparison(self):
         if os.name != 'nt':
             self.skipTest('Windows case-insensitive filesystem comparison unavailable')
@@ -229,11 +242,7 @@ class IntegrationTests(SyntheticCase):
 
     def test_stub_environment_count_and_exit(self):
         self.ready()
-        os.environ['SYNTHETIC_CREDENTIAL'] = 'dummy-only'
-        try:
-            p = self.phase('run')
-        finally:
-            os.environ.pop('SYNTHETIC_CREDENTIAL', None)
+        p = self.invoke_script("$env:SYNTHETIC_CREDENTIAL='dummy-only'; " + self.phase_script('run'))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.count(), 1)
         record = json.loads(self.marker.read_text(encoding='utf-8-sig'))
@@ -241,9 +250,20 @@ class IntegrationTests(SyntheticCase):
         self.assertEqual(Path(record['user_home']), self.root / 'dsh-home')
         self.assertEqual(Path(record['cwd']), self.root)
         self.assertEqual(Path(record['temp']), self.root)
-        allowed = {'dsh_home', 'home', 'userprofile', 'appdata', 'localappdata', 'temp', 'tmp', 'systemroot', 'windir', 'stub_scenario'}
-        # PowerShell 自行增加 PSModulePath/PATH；启动前 Guard 不允许传入 PATH。
-        self.assertLessEqual({n.lower() for n in record['environment_names']}, allowed | {'psmodulepath', 'powershell_distribution_channel', 'path'})
+        required = {'dsh_home', 'home', 'userprofile', 'appdata', 'localappdata', 'temp', 'tmp', 'stub_scenario'}
+        launcher_names = required | {'systemroot', 'windir'}
+        # Guard 单独验证启动前的白名单；此处仅允许各宿主启动后增加的名称。
+        if os.name == 'nt':
+            self.assertIn(record['edition'], ('Desktop', 'Core'))
+            host_names = {'pathext', 'psmodulepath'}
+            if record['edition'] == 'Core':
+                host_names.add('path')
+        else:
+            host_names = {'psmodulepath', 'powershell_distribution_channel', 'path'}
+        observed = {name.lower() for name in record['environment_names']}
+        self.assertNotIn('synthetic_credential', observed)
+        self.assertLessEqual(required, observed)
+        self.assertLessEqual(observed - launcher_names, host_names)
         self.assertEqual(record['scenario'], 'ok')
 
     def test_missing_manifest(self):
@@ -335,7 +355,7 @@ class IntegrationTests(SyntheticCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.count(), 1)
         self.assertTrue(self.marker.exists())
-        self.assertIn(f'stdout_chars={stdout} stderr_chars={stderr} retained_chars=0', p.stdout)
+        self.assertIn(f'COMPLETED exit=0 stdout_chars={stdout} stderr_chars={stderr} retained_chars=0', p.stdout.splitlines())
         self.assertLess(len(p.stdout) + len(p.stderr), 2048)
 
     def test_nonzero_exit_is_not_completed(self):
@@ -468,26 +488,73 @@ class IntegrationTests(SyntheticCase):
         self.ready()
         tools = self.copied_tools()
         pid_file = self.root / 'checker-pid.txt'
-        checker = 'import os,time\nfrom pathlib import Path\nPath(' + repr(str(pid_file)) + ').write_text(str(os.getpid()))\ntime.sleep(60)\n'
+        stop_file = self.root / 'checker-stop'
+        checker = (
+            'import os, time\nfrom pathlib import Path\n'
+            f'pid_file = Path({str(pid_file)!r})\nstop_file = Path({str(stop_file)!r})\n'
+            'pending = pid_file.with_suffix(".tmp")\n'
+            'pending.write_text(str(os.getpid()))\npending.replace(pid_file)\n'
+            'deadline = time.monotonic() + 60\n'
+            'while not stop_file.exists() and time.monotonic() < deadline:\n'
+            '    time.sleep(0.05)\n'
+        )
         (tools / 'no_tools_preflight.py').write_text(checker)
-        parent = subprocess.Popen(command(self.phase_script('preflight', tools=tools)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            deadline = time.monotonic() + 15
-            while not pid_file.exists() and time.monotonic() < deadline and parent.poll() is None:
-                time.sleep(0.05)
-            self.assertTrue(pid_file.exists(), 'controlled checker did not reach invalidated state')
-            self.assertFalse(self.manifest.exists())
-            self.blocked(self.phase('run'))
-            parent.kill()
-            parent.communicate(timeout=8)
-            self.blocked(self.phase('run'))
-        finally:
-            if parent.poll() is None:
+        # 父进程会被强杀，避免后代持有测试框架等待 EOF 的输出管道。
+        parent = subprocess.Popen(
+            command(self.phase_script('preflight', tools=tools)),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+        def stop_launcher():
+            if parent.poll() is not None:
+                return
+            if not pid_file.exists():
+                # 未取得 PID 时通知迟到的 checker 自行退出，先让 Launcher 回收它。
+                stop_file.touch()
+                try:
+                    parent.wait(timeout=45)
+                except subprocess.TimeoutExpired:
+                    parent.kill()
+                    parent.wait(timeout=8)
+                    raise
+            else:
                 parent.kill()
-                parent.communicate(timeout=8)
-            # 强制终止父进程不能运行 finally；只清理此测试明确记录的合成 checker。
-            if pid_file.exists():
-                self.invoke_script('Stop-Process -Id ' + pid_file.read_text().strip() + ' -ErrorAction SilentlyContinue')
+                parent.wait(timeout=8)
+
+        def stop_checker():
+            if not pid_file.exists():
+                return
+            pid = int(pid_file.read_text())
+            self.assertGreater(pid, 0)
+            result = self.invoke_script(
+                "$ErrorActionPreference='Stop'; "
+                f"try {{ $checker=[Diagnostics.Process]::GetProcessById({pid}) }} catch [ArgumentException] {{ exit 0 }}; "
+                "try { if (-not $checker.HasExited) { $checker.Kill() }; "
+                "if (-not $checker.WaitForExit(5000)) { throw 'synthetic checker did not exit' } } "
+                "finally { $checker.Dispose() }",
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # unittest 逆序执行两个清理项，父进程清理失败时仍会尝试回收 checker。
+        self.addCleanup(stop_checker)
+        self.addCleanup(stop_launcher)
+        deadline = time.monotonic() + 15
+        while not pid_file.exists() and time.monotonic() < deadline and parent.poll() is None:
+            time.sleep(0.05)
+        self.assertTrue(pid_file.exists(), 'controlled checker did not reach invalidated state')
+        self.assertIsNone(parent.poll())
+        self.assertFalse(self.manifest.exists())
+        concurrent_run = self.phase('run')
+        self.blocked(concurrent_run)
+        self.assertIn('BLOCKED ', concurrent_run.stdout)
+        self.assertIsNone(parent.poll())
+        parent.kill()
+        self.assertNotEqual(parent.wait(timeout=8), 0)
+        self.assertFalse(self.manifest.exists())
+        later_run = self.phase('run')
+        self.blocked(later_run)
+        self.assertIn('BLOCKED E_NO_MANIFEST', later_run.stdout)
 
     def test_successful_stub_repeated_start_count(self):
         self.ready()

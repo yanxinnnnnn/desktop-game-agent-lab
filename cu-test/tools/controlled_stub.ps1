@@ -1,6 +1,8 @@
 # 固定合成目标：不接受命令/脚本/可执行路径，不创建后代，不访问网络。
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# PS 5.1 模块首次初始化的进度会经 CLIXML 写到 stderr，干扰固定流测试。
+$ProgressPreference = 'SilentlyContinue'
 $root = [Environment]::CurrentDirectory
 $countPath = [IO.Path]::Combine($root, 'stub-starts.txt')
 $markerPath = [IO.Path]::Combine($root, 'stub-marker.json')
@@ -9,6 +11,7 @@ $names = @([Environment]::GetEnvironmentVariables().Keys | Sort-Object)
 $record = [ordered]@{
     home = $env:DSH_HOME; cwd = $root; pid = $PID; environment_names = $names
     user_home = $env:USERPROFILE; temp = $env:TEMP; scenario = $env:STUB_SCENARIO
+    edition = $PSVersionTable.PSEdition
 }
 [IO.File]::WriteAllText($markerPath, ($record | ConvertTo-Json -Depth 4))
 switch ($env:STUB_SCENARIO) {
