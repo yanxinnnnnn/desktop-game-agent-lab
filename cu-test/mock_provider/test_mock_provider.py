@@ -1,5 +1,6 @@
 """使用内存 HTTP 流和临时 Journal 验证协议，无 socket。"""
 
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import os
@@ -327,3 +328,120 @@ class ListenerContractTests(unittest.TestCase):
         handler.server.mock.exchange.assert_called_once_with(handler.rfile, handler.wfile, 102)
         timer.call_args.args[1]()
         handler.request.shutdown.assert_called_once_with(entry.socket.SHUT_RDWR)
+
+
+class MainExitTests(unittest.TestCase):
+    def run_main(self, *steps):
+        directory = tempfile.TemporaryDirectory(prefix="mock-provider-main-test-")
+        self.addCleanup(directory.cleanup)
+        clock = mock.Mock(return_value=0)
+        actions = iter(steps)
+        server = mock.MagicMock(deadline=entry.LIFETIME_SECONDS)
+        server.__enter__.return_value = server
+
+        def make_server(_port, subject):
+            def handle_request():
+                action = next(actions, None)
+                if action is None:
+                    clock.return_value = server.deadline
+                else:
+                    action(subject, clock)
+
+            server.handle_request.side_effect = handle_request
+            return server
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(entry.sys, "argv", ["mock_provider", "--port", "8765"]),
+            mock.patch.object(entry.tempfile, "mkdtemp", return_value=directory.name),
+            mock.patch.object(entry.time, "monotonic", clock),
+            mock.patch.object(entry, "MockProvider", side_effect=lambda root: provider.MockProvider(root, clock=clock)),
+            mock.patch.object(entry, "_Server", side_effect=make_server),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = entry.main()
+        journal = Path(directory.name) / provider.JOURNAL_NAME
+        return code, stdout.getvalue(), stderr.getvalue(), json.loads(journal.read_text(encoding="utf-8"))
+
+    def assert_incomplete(self, result):
+        code, stdout, stderr, journal = result
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr, "MOCK_SSE_INCOMPLETE\n")
+        self.assertNotIn("MOCK_SSE_COMPLETE_LOCAL", stdout)
+        return journal
+
+    def test_no_requests_before_listener_expires(self):
+        journal = self.assert_incomplete(self.run_main())
+        self.assertEqual(journal["attempts"], 0)
+
+    def test_only_rejected_requests(self):
+        def reject(subject, _clock):
+            subject.exchange(io.BytesIO(wire(body(stream=False))), io.BytesIO())
+
+        journal = self.assert_incomplete(self.run_main(reject))
+        event = journal["requests"][0]
+        self.assertEqual((event["status"], event["delivery"], event["done_sent"]), (400, "complete", False))
+
+    def test_accepted_request_disconnects_before_done(self):
+        class Disconnect(io.BytesIO):
+            def write(self, data):
+                if data == provider.DONE:
+                    raise BrokenPipeError("synthetic private detail")
+                return super().write(data)
+
+        def disconnect(subject, _clock):
+            subject.exchange(io.BytesIO(wire()), Disconnect())
+
+        journal = self.assert_incomplete(self.run_main(disconnect))
+        event = journal["requests"][0]
+        self.assertEqual((journal["accepted"], event["delivery"], event["done_sent"]), (1, "disconnect", False))
+
+    def test_done_written_at_deadline_does_not_count_as_complete(self):
+        def timeout(subject, clock):
+            class DeadlineSink(io.BytesIO):
+                def write(self, data):
+                    if data == provider.DONE:
+                        clock.return_value = provider.REQUEST_SECONDS
+                    return super().write(data)
+
+            subject.exchange(io.BytesIO(wire()), DeadlineSink())
+
+        journal = self.assert_incomplete(self.run_main(timeout))
+        event = journal["requests"][0]
+        self.assertEqual((event["delivery"], event["done_sent"]), ("timeout", True))
+
+    def test_complete_local_sse_exits_zero(self):
+        sink = io.BytesIO()
+        code, stdout, stderr, journal = self.run_main(
+            lambda subject, _clock: subject.exchange(io.BytesIO(wire()), sink),
+        )
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("MOCK_SSE_COMPLETE_LOCAL\n", stdout)
+        self.assertTrue(sink.getvalue().endswith(provider.DONE))
+        event = journal["requests"][0]
+        self.assertEqual((event["status"], event["delivery"], event["done_sent"]), (200, "complete", True))
+
+    def test_keyboard_interrupt_overrides_even_completed_delivery(self):
+        def interrupt(subject, _clock):
+            subject.exchange(io.BytesIO(wire()), io.BytesIO())
+            raise KeyboardInterrupt
+
+        code, stdout, stderr, journal = self.run_main(interrupt)
+        self.assertEqual((code, stderr), (130, "MOCK_INTERRUPTED\n"))
+        self.assertNotIn("MOCK_SSE_COMPLETE_LOCAL", stdout)
+        self.assertEqual(journal["requests"][0]["delivery"], "complete")
+
+    def test_failed_final_journal_sync_does_not_report_success(self):
+        sink = io.BytesIO()
+
+        def fail_sync(subject, _clock):
+            with mock.patch.object(provider.os, "fsync", side_effect=(None, None, OSError("synthetic private detail"))):
+                subject.exchange(io.BytesIO(wire()), sink)
+
+        code, stdout, stderr, journal = self.run_main(fail_sync)
+        self.assertEqual((code, stderr), (1, "Mock stopped: local processing failed.\n"))
+        self.assertNotIn("MOCK_SSE_COMPLETE_LOCAL", stdout)
+        self.assertTrue(sink.getvalue().endswith(provider.DONE))
+        event = journal["requests"][0]
+        self.assertEqual((event["delivery"], event["done_sent"]), ("pending", False))

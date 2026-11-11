@@ -67,12 +67,22 @@ def main():
                 if server.timeout <= 0:
                     break
                 server.handle_request()
+        # exchange 返回前已同步最终 Journal。退出 0 仅表示本机输出完成。
+        if any(
+            record.status == 200 and record.category == "accepted"
+            and record.done_sent and record.delivery == "complete"
+            for record in provider.records
+        ):
+            print("MOCK_SSE_COMPLETE_LOCAL")
+            return 0
     except KeyboardInterrupt:
-        return 0
+        print("MOCK_INTERRUPTED", file=sys.stderr)
+        return 130
     except Exception:
         print("Mock stopped: local processing failed.", file=sys.stderr)
         return 1
-    return 0
+    print("MOCK_SSE_INCOMPLETE", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
