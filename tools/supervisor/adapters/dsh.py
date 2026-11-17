@@ -70,6 +70,7 @@ _MESSAGES = {
     'E_DSH_SESSION': '事件或 runner 的会话关联不一致；会话值已抑制。',
     'E_DSH_FINAL_MISSING': '缺少 final；不能将工具完成或进程退出视为任务完成。',
     'E_DSH_CONFLICT': 'error 事件与 completed final 冲突；不能确认成功。',
+    'E_DSH_UNEXPECTED_TOOL': '固定 READY 探针出现工具事件；不能确认成功。',
     'E_DSH_TRUNCATED': '捕获或事件标记为截断；不能确认结果。',
     'E_DSH_EVIDENCE': '错误码证明必须来自带类型的 fixture harness 且绑定实际 error 事件。',
     'E_DSH_INTERNAL': '离线解析失败；原始异常和输入已抑制。',
@@ -245,6 +246,11 @@ class DshOfflineAdapter:
     """实现 EventAdapter.parse；只产生 synthetic 记录，未提供真实 runner 准入路径。"""
 
     def parse(self, record: object) -> Result:
+        return self._parse(record)
+
+    @staticmethod
+    def _parse(record: object, *, forbid_tools=False) -> Result:
+        # 共享纯解析路径始终生成 synthetic；只有 Worker 的真实 OS 启动边界可赋予真实来源。
         try:
             _context(record)
             session_id, final_kind, terminal_code = None, None, None
@@ -255,6 +261,8 @@ class DshOfflineAdapter:
                 except (UnicodeError, ValueError):
                     _reject('E_DSH_JSON')
                 _walk(event, budget)
+                if forbid_tools and isinstance(event, dict) and event.get('type') in ('tool_call', 'tool_result'):
+                    _reject('E_DSH_UNEXPECTED_TOOL')
                 kind = _shape(event)
                 if final_kind is not None or (index == 0 and kind != 'session'):
                     _reject('E_DSH_ORDER')
