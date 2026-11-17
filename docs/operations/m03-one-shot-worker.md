@@ -27,7 +27,7 @@ $ledger = Join-Path $env:LOCALAPPDATA 'desktop-game-agent-lab/worker'
 python -m tools.supervisor.worker --issue 31 --base-dir $ledger --github-probe
 ```
 
-无 `--github-probe` 时不启动 `gh`。主动指定 `--mode real` 也会在启动任何执行器和 `gh` 之前返回 `real_dsh_disabled`。
+无 `--github-probe` 时不启动 `gh`。若只指定 `--mode real` 而未提供本机审核清单和授权，Worker 会在启动执行器或 `gh` 前返回 `real_dsh_disabled`。
 
 验收时对照命令返回的 `task`、GitHub #31 上唯一的结果标记和以下账本查询：
 
@@ -47,4 +47,4 @@ Worker 在任何执行前通过 SQLite 事务领取唯一稳定任务 ID，再�
 
 ## 真实执行边界
 
-真实模式尚未实现或运行。#23 的旧授权已消耗；真实测试需要另一个探针和 Founder 单次授权。启用前先核对 `dsh_session_log` 等附带数据路径、有效配置与工具/标题/遥测禁用、进程环境、官方端点和零应用层重试。只有真实 runner 自身的退出码 0 与完整、匹配的结构化 DSH `completed` 能证明真实通过；不得复用合成标签或证据。
+真实模式默认阻塞，请见 [Phase 2 预检与实机门禁](m03-real-dsh-runner.md)。#23 的旧授权已消耗；真实测试须用另一个探针，经 CTO 复审和 Founder 单次授权。不得复用 #31 的合成标签或证据。
