@@ -213,36 +213,56 @@ def load_approved(issue, ledger, path, authorization):
         raise RealBlocked('real_preflight_failed') from None
 
 
+def _win32_directories():
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    # LOAD_LIBRARY_SEARCH_SYSTEM32：不使用当前目录或父进程 PATH 搜索 DLL。
+    kernel = c.WinDLL('kernel32.dll', winmode=0x800)
+
+    def read(function):
+        function.argtypes, function.restype = [w.LPWSTR, w.UINT], w.UINT
+        buffer = c.create_unicode_buffer(32768)
+        length = function(buffer, len(buffer))
+        if not 0 < length < len(buffer) or len(buffer.value) != length:
+            raise OSError('system_directory_query')
+        return buffer.value
+
+    return read(kernel.GetSystemWindowsDirectoryW), read(kernel.GetSystemDirectoryW)
+
+
 def _windows_system(launcher, temp_parent):
-    system_root = _absolute(os.environ.get('SystemRoot', ''))
-    system = _absolute(system_root / 'System32')
-    if not system.is_dir():
-        raise RealBlocked('real_preflight_failed')
-    if launcher.suffix.lower() == '.cmd':
-        if any(_SAFE_CMD.search(str(value)) for value in (launcher, temp_parent, system)):
+    try:
+        root_path, system_path = _win32_directories()
+        system_root, system = _absolute(root_path), _absolute(system_path)
+        cmd = _absolute(system / 'cmd.exe')
+        if (not system_root.is_dir() or not system.is_dir() or system.parent != system_root or
+                not cmd.is_file() or any(os.pathsep in str(value) for value in (system, launcher.parent))):
             raise RealBlocked('real_preflight_failed')
-        if not _absolute(system / 'cmd.exe').is_file():
+        if launcher.suffix.lower() == '.cmd' and any(
+                _SAFE_CMD.search(str(value)) for value in (launcher, temp_parent, cmd)):
             raise RealBlocked('real_preflight_failed')
-    return system_root, system
+        return system_root, system, cmd
+    except (OSError, AttributeError, ValueError):
+        raise RealBlocked('real_preflight_failed') from None
 
 
 def _launch_inputs(launcher, root, patch):
-    system_root, system = _windows_system(launcher, patch)
-    home = root / 'home'
-    for folder in (home, root / 'tmp', root / 'work', root / 'appdata', root / 'localappdata'):
+    system_root, system, cmd = _windows_system(launcher, patch)
+    home, agents_home = root / 'home', root / 'agents-home'
+    for folder in (home, agents_home, root / 'tmp', root / 'work', root / 'appdata', root / 'localappdata'):
         folder.mkdir()
     env = {
         'SystemRoot': str(system_root), 'windir': str(system_root),
-        'PATH': os.pathsep.join((str(launcher.parent), str(system))),
-        'DSH_HOME': str(home), 'HOME': str(home), 'USERPROFILE': str(home),
+        'PATH': os.pathsep.join((str(system), str(launcher.parent))), 'ComSpec': str(cmd),
+        'DSH_HOME': str(home), 'DSH_AGENTS_HOME': str(agents_home), 'HOME': str(home), 'USERPROFILE': str(home),
         'APPDATA': str(root / 'appdata'), 'LOCALAPPDATA': str(root / 'localappdata'),
         'TEMP': str(root / 'tmp'), 'TMP': str(root / 'tmp'), 'DSH_TELEMETRY_DISABLED': '1',
     }
     args = ['--profile', EFFECTIVE['profile'], '--patch', str(patch), '--json', PROMPT]
     if launcher.suffix.lower() == '.cmd':
         # #23 使用 Windows 批处理入口；命令文本只拼接固定参数与预检的安全本地路径。
-        executable = system / 'cmd.exe'
-        env['ComSpec'] = str(executable)
+        executable = cmd
         command = f'"{executable}" /d /v:off /s /c ""{launcher}" --profile headless --patch "{patch}" --json "{PROMPT}""'
     else:
         executable = launcher

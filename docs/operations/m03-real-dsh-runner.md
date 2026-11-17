@@ -4,11 +4,13 @@ Refs #33、#30。当前只交付离线接线与 stub 证据。#31 原合成验�
 
 ## 离线验证
 
-从仓库根目录运行 `python -m unittest discover -s tests/supervisor` 和 `python -m unittest discover -s tests/notifications`。使用假 GitHub、临时 SQLite、合成 NDJSON 和本地 stub；Windows 另测固定批处理参数、超时、后代清理、输出限长及遇到工具事件停止。未启动 DSH、未使用真实凭据、未调用模型，未放宽 #25 的安全门禁。
+从仓库根目录运行 `python -m unittest discover -s tests/supervisor` 和 `python -m unittest discover -s tests/notifications`。使用假 GitHub、临时 SQLite、合成 NDJSON 和本地 stub；Windows 另测固定批处理参数、父进程系统目录伪造、双 home 隔离、超时、后代清理、输出限长及遇到工具事件停止。未启动 DSH、未使用真实凭据、未调用模型，未放宽 #25 的安全门禁。
 
 ## CTO 复审前：DeepSeek 离线核对
 
 依据 [#23 已审方案](https://github.com/yanxinnnnnn/desktop-game-agent-lab/issues/23#issuecomment-6792606871) 准备本机配置。命令形状固定为 `dsh --profile headless --patch <临时审核副本> --json <固定 READY 提示>`；提示为 `Reply with exactly: READY. Do not call tools, open files, browse, modify data, or run commands.`。已审核的 `dsh.cmd` 由系统 `cmd.exe /d /v:off /s /c` 启动；原生 `dsh.exe` 不经过 shell。确认包装器准确传回 DSH 退出码、只启动一次，依赖能从审核目录和系统目录解析，且不依赖用户配置或环境。
+
+Worker 用 `GetSystemWindowsDirectoryW` 和 `GetSystemDirectoryW` 构造子进程的 `SystemRoot`、`windir`、系统优先的 `PATH` 及 `ComSpec`。系统路径查询或校验失败时停止，不从父进程环境查找替代解释器。每次运行在同一临时根内建立两个独立目录，分别设置 `DSH_HOME` 和 `DSH_AGENTS_HOME`，不沿用父级 home。
 
 审核实际加载的完整 base/profile/overlay、launcher 及传递依赖；只启用 `deepseek-official/deepseek-flash`，固定 base URL `https://api.deepseek.com/anthropic`，实际请求 `POST https://api.deepseek.com/anthropic/v1/messages`，`max_tokens=64`、应用层 `maxRetries=0`、拒绝重定向。确认临时 home/profile/runtime、无其他 provider、工具、Subagent、标题模型或遥测。**单独确认** `dsh_session_log`、`dsh_plugin_packages` 及其他请求附带数据是否启用并验证禁用方式；仅关闭 OTel 不足。遇到未知项，保持阻塞，勿标成通过。
 

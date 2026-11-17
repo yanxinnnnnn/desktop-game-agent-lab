@@ -56,6 +56,11 @@ class RealWorkerTests(unittest.TestCase):
         self.system = self.root / 'windows'
         (self.system / 'System32').mkdir(parents=True)
         (self.system / 'System32' / 'cmd.exe').touch()
+        self.decoy = self.root / 'fake-windows' / 'System32' / 'cmd.exe'
+        self.decoy.parent.mkdir(parents=True)
+        self.decoy.touch()
+        self.parent_agents = self.root / 'parent-agents'
+        self.parent_agents.mkdir()
         self.review = dict(schema_version=1, issue=_ISSUE, ledger=str(self.ledger), temp_parent=str(self.temporary),
                            launcher=_pin(self.launcher), overlay=_pin(self.overlay), runtime_files=[_pin(self.runtime)],
                            effective=dict(dsh.EFFECTIVE), reviewed_checks=dict.fromkeys(dsh.CHECKS, True))
@@ -63,8 +68,12 @@ class RealWorkerTests(unittest.TestCase):
         self.github_constructor = self.enterContext(patch.object(worker, 'GhGitHub', return_value=self.github))
         self.native = self.enterContext(patch.object(dsh, 'capture_windows', return_value=ProcessResult(_trace(), 0)))
         self.enterContext(patch.object(dsh, '_on_windows', return_value=True))
+        self.system_api = self.enterContext(patch.object(
+            dsh, '_win32_directories', return_value=(str(self.system), str(self.system / 'System32'))))
         self.enterContext(patch.dict(os.environ, {
-            dsh.KEY_NAME: _CREDENTIAL, 'SystemRoot': str(self.system), 'GH_TOKEN': 'fake-github-only',
+            dsh.KEY_NAME: _CREDENTIAL, 'SystemRoot': str(self.decoy.parent.parent),
+            'windir': str(self.decoy.parent.parent), 'ComSpec': str(self.decoy), 'PATH': str(self.decoy.parent),
+            'DSH_AGENTS_HOME': str(self.parent_agents), 'GH_TOKEN': 'fake-github-only',
             'USERPROFILE': str(self.root), 'HOME': str(self.root),
             'DEEPSEEK_BASE_URL': 'https://fixture.invalid', 'HTTPS_PROXY': 'fake-proxy',
         }, clear=True))
@@ -125,6 +134,20 @@ class RealWorkerTests(unittest.TestCase):
         self.assertFalse(self.github.comments)
         self.assertEqual(Supervisor(self.ledger).status()['Data']['tasks'], [])
 
+    def test_unusable_system_directory_blocks_before_claim_or_launch(self):
+        self.system_api.side_effect = OSError('fixture query failed')
+        self.assertEqual(self.main()[1]['Code'], 'real_preflight_failed')
+        self.system_api.side_effect = None
+        for paths in (('', str(self.system / 'System32')),
+                      (str(self.system), str(self.decoy.parent)),
+                      (str(self.system), str(self.system / 'missing'))):
+            with self.subTest(paths=paths):
+                self.system_api.return_value = paths
+                self.assertEqual(self.main()[1]['Code'], 'real_preflight_failed')
+        self.native.assert_not_called()
+        self.assertFalse(self.github.comments)
+        self.assertEqual(Supervisor(self.ledger).status()['Data']['tasks'], [])
+
     def test_synthetic_declaration_and_extra_prompt_cannot_trigger_real(self):
         for body in (_BODY, _BODY_REAL.replace('"mode": "real"', '"mode":"real","prompt":"inject"')):
             self.github.body = body
@@ -142,15 +165,25 @@ class RealWorkerTests(unittest.TestCase):
             task, = self.journal()['tasks']
             self.assertEqual(task['state'], 'RUNNING')
             self.assertEqual(exe, self.system / 'System32' / 'cmd.exe')
+            self.assertNotEqual(exe, self.decoy)
+            self.assertNotIn(str(self.decoy), command)
             self.assertIn(' /d /v:off /s /c ', command)
             self.assertIn(f'"{self.launcher}" --profile headless --patch ', command)
             self.assertIn(f'--json "{dsh.PROMPT}"', command)
             self.assertNotIn(_CREDENTIAL, command)
             self.assertEqual((cwd.parent / 'overlay.yml').read_bytes(), self.overlay.read_bytes())
-            self.assertEqual(set(env), {'SystemRoot', 'windir', 'PATH', 'DSH_HOME', 'HOME', 'USERPROFILE', 'APPDATA',
-                                        'LOCALAPPDATA', 'TEMP', 'TMP', 'DSH_TELEMETRY_DISABLED', 'ComSpec', dsh.KEY_NAME})
-            for name in ('DSH_HOME', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP'):
+            self.assertEqual(set(env), {'SystemRoot', 'windir', 'PATH', 'DSH_HOME', 'DSH_AGENTS_HOME', 'HOME',
+                                        'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP',
+                                        'DSH_TELEMETRY_DISABLED', 'ComSpec', dsh.KEY_NAME})
+            self.assertEqual(env['SystemRoot'], str(self.system))
+            self.assertEqual(env['windir'], str(self.system))
+            self.assertEqual(env['ComSpec'], str(exe))
+            self.assertEqual(env['PATH'].split(os.pathsep), [str(exe.parent), str(self.launcher.parent)])
+            for name in ('DSH_HOME', 'DSH_AGENTS_HOME', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP'):
+                self.assertTrue(Path(env[name]).is_dir())
                 self.assertTrue(Path(env[name]).is_relative_to(cwd.parent))
+            self.assertNotEqual(env['DSH_HOME'], env['DSH_AGENTS_HOME'])
+            self.assertNotEqual(env['DSH_AGENTS_HOME'], str(self.parent_agents))
             self.assertEqual(env[dsh.KEY_NAME], _CREDENTIAL)
             self.assertEqual(env['DSH_TELEMETRY_DISABLED'], '1')
             return ProcessResult(_trace(), 0)
@@ -244,8 +277,13 @@ class WindowsJobStubTests(unittest.TestCase):
         self.assertEqual(result.stdout, b'')
 
     def test_reviewed_batch_command_runs_only_a_fixed_local_stub(self):
-        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, {dsh.KEY_NAME: _CREDENTIAL}):
+        with tempfile.TemporaryDirectory() as name:
             root = Path(name)
+            decoy = root / 'fake-windows' / 'System32' / 'cmd.exe'
+            decoy.parent.mkdir(parents=True)
+            decoy.write_bytes(b'not the system interpreter')
+            inherited_agents = root / 'parent-agents'
+            inherited_agents.mkdir()
             batch = root / 'dsh.cmd'
             overlay = root / 'overlay.yml'
             overlay.write_text('fixture only')
@@ -257,12 +295,23 @@ class WindowsJobStubTests(unittest.TestCase):
                             'assert Path(sys.argv[4]).read_text() == "fixture only"\n'
                             f'assert sys.argv[5:] == ["--json", {dsh.PROMPT!r}]\n'
                             'assert os.environ["DSH_TELEMETRY_DISABLED"] == "1"\n'
-                            'assert Path(os.environ["DSH_HOME"]).parent == Path.cwd().parent\n'
+                            f'assert os.environ[{dsh.KEY_NAME!r}] == {_CREDENTIAL!r}\n'
+                            'home, agents = (Path(os.environ[k]) for k in ("DSH_HOME", "DSH_AGENTS_HOME"))\n'
+                            'assert home != agents and home.is_dir() and agents.is_dir()\n'
+                            'assert home.parent == agents.parent == Path.cwd().parent\n'
+                            f'assert agents != Path({str(inherited_agents)!r})\n'
                             f'sys.stdout.buffer.write({_trace()!r})\n', encoding='utf-8')
             batch.write_text(f'@echo off\n"{sys.executable}" -I -S "{stub}" %*\nexit /b %errorlevel%\n',
                              encoding='utf-8')
-            exe, command, env = dsh._launch_inputs(batch, root, overlay)
-            self.assertEqual(capture_windows(exe, command, root / 'work', env), ProcessResult(_trace(), 0))
+            with patch.dict(os.environ, {dsh.KEY_NAME: _CREDENTIAL, 'SystemRoot': str(decoy.parent.parent),
+                                         'windir': str(decoy.parent.parent), 'ComSpec': str(decoy),
+                                         'PATH': str(decoy.parent), 'DSH_AGENTS_HOME': str(inherited_agents)}):
+                exe, command, env = dsh._launch_inputs(batch, root, overlay)
+                self.assertNotEqual(exe, decoy)
+                self.assertNotEqual(env['SystemRoot'], os.environ['SystemRoot'])
+                self.assertNotIn(str(decoy.parent), env['PATH'].split(os.pathsep))
+                self.assertEqual(env['ComSpec'], str(exe))
+                self.assertEqual(capture_windows(exe, command, root / 'work', env), ProcessResult(_trace(), 0))
 
     def test_timeout_stops_the_stub_descendant(self):
         import _winapi as win
