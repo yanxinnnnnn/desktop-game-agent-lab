@@ -14,7 +14,7 @@ python -m unittest discover -s tests/supervisor -v
 
 ## Windows GitHub 合成闭环
 
-CTO 指定 #31。只处理显式提供的单个仓库探针编号；复用本机已认证的 `gh`，缺认证返回 `github_auth`，不要求复制凭据。探针正文可有说明，但只接受唯一的 JSON 代码块：
+CLI 只接受 CTO 指定的 #31。其他编号（包括 #30）即使正文含合法声明，也会在创建 GitHub 客户端或启动执行器前返回 `probe_issue_not_allowed`。复用本机已认证的 `gh`，缺认证返回 `github_auth`，不要求复制凭据。探针正文可有说明，但只接受唯一的 JSON 代码块：
 
 ```json
 {"schema_version":1,"task_type":"ready_probe","mode":"synthetic"}
@@ -27,7 +27,7 @@ $ledger = Join-Path $env:LOCALAPPDATA 'desktop-game-agent-lab/worker'
 python -m tools.supervisor.worker --issue 31 --base-dir $ledger --github-probe
 ```
 
-无 `--github-probe` 时不启动 `gh`。主动指定 `--mode real` 也会在启动任何执行器和 `gh` 之前返回 `real_dsh_disabled`。`--github-probe` 仅用于 CTO 指定的探针，勿用于规格 Issue #30。
+无 `--github-probe` 时不启动 `gh`。主动指定 `--mode real` 也会在启动任何执行器和 `gh` 之前返回 `real_dsh_disabled`。
 
 验收时对照命令返回的 `task`、GitHub #31 上唯一的结果标记和以下账本查询：
 

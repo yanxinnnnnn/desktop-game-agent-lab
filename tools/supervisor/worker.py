@@ -28,6 +28,7 @@ _READY = (
     '{"type":"final","sessionId":"synthetic-ready-fixture","reason":{"kind":"completed"},"text":"READY"}\n'
 ).encode('ascii')
 _RUN_TIMEOUT = 5
+_GITHUB_PROBE_ISSUE = 31
 _GH_ERRORS = {'invalid_issue', 'github_unavailable', 'github_auth', 'github_cli_missing', 'comment_scan_limit'}
 
 
@@ -272,7 +273,7 @@ class _Parser(argparse.ArgumentParser):
 
 def main(argv=None):
     parser = _Parser(description='M0.3 单次 Worker：只允许指定 GitHub 探针上的合成 READY 回路。')
-    parser.add_argument('--issue', required=True, type=int, help='CTO 指定的探针 Issue 编号。')
+    parser.add_argument('--issue', required=True, type=int, help=f'仅接受 CTO 指定的探针 Issue #{_GITHUB_PROBE_ISSUE}。')
     parser.add_argument('--base-dir', required=True, type=Path, help='Git 仓库之外的稳定本机账本目录。')
     parser.add_argument('--mode', default='synthetic', choices=('synthetic', 'real'))
     parser.add_argument('--github-probe', action='store_true', help='显式启用该探针的一次 GitHub 回写。')
@@ -281,8 +282,8 @@ def main(argv=None):
         result = _blocked('real_dsh_disabled')
     elif not args.github_probe:
         result = _blocked('github_probe_required')
-    elif not valid_number(args.issue):
-        result = _blocked('invalid_issue')
+    elif args.issue != _GITHUB_PROBE_ISSUE:
+        result = _blocked('probe_issue_not_allowed')
     else:
         try:
             result = run_once(args.issue, args.base_dir, github=GhGitHub())

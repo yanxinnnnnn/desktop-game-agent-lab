@@ -220,12 +220,41 @@ class WorkerTests(unittest.TestCase):
         self.runner.assert_not_called()
 
     def test_cli_without_explicit_network_or_with_real_mode_does_not_start_gh(self):
-        args = ['--issue', str(_NUMBER), '--base-dir', self.root]
+        args = ['--issue', '31', '--base-dir', self.root]
         for more, code in (([], 'github_probe_required'), (['--mode', 'real', '--github-probe'], 'real_dsh_disabled')):
             with patch.object(worker, 'GhGitHub') as gh, redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(worker.main(args + more), 1)
             gh.assert_not_called()
             self.assertEqual(json.loads(output.getvalue())['Code'], code)
+
+    def test_cli_blocks_other_issues_even_with_a_matching_task(self):
+        capture = subprocess.CompletedProcess([], 0, worker._READY)
+        for number in (30, 32, 0):
+            with self.subTest(number=number), patch.object(worker, 'GhGitHub', return_value=self.github) as gh, patch(
+                    'tools.supervisor.worker.subprocess.run', return_value=capture) as runner, redirect_stdout(
+                    io.StringIO()) as output:
+                status = worker.main(['--issue', str(number), '--base-dir', self.root, '--github-probe'])
+                self.assertEqual(status, 1)
+                self.assertEqual(json.loads(output.getvalue())['Code'], 'probe_issue_not_allowed')
+                gh.assert_not_called()
+                runner.assert_not_called()
+                self.assertEqual(self.github.calls, [])
+                self.assertEqual(self.github.comments, [])
+
+    def test_cli_accepts_issue_31_with_fake_github(self):
+        capture = subprocess.CompletedProcess([], 0, worker._READY)
+        with patch.object(worker, 'GhGitHub', return_value=self.github) as gh, patch(
+                'tools.supervisor.worker.subprocess.run', return_value=capture) as runner, redirect_stdout(
+                io.StringIO()) as output:
+            self.assertEqual(worker.main(['--issue', '31', '--base-dir', self.root, '--github-probe']), 0)
+        gh.assert_called_once_with()
+        runner.assert_called_once()
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['Code'], 'OK')
+        self.assertEqual(result['Data']['classification'], 'PASS')
+        self.assertTrue(result['Data']['synthetic'])
+        self.assertEqual(self.github.calls, [('identity',), ('issue', 31), ('comments', 31), ('post', 31)])
+        self.assertEqual(len(self.github.comments), 1)
 
 
 class GhBoundaryTests(unittest.TestCase):
