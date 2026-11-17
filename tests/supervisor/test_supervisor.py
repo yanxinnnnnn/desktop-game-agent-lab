@@ -1,7 +1,7 @@
 """合成事件及可信 Mock adapter 夹具；临时数据库/假时钟/Mock 网络，无真实客户端或凭据。"""
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import closing, redirect_stdout, redirect_stderr
 from copy import deepcopy
 import io
 import json
@@ -318,13 +318,13 @@ class SupervisorTests(unittest.TestCase):
         self.sender.send.assert_not_called()
 
     def test_missing_delivery_table_is_not_silently_rebuilt(self):
-        with sqlite3.connect(self.base / 'supervisor.sqlite3') as connection:
+        with closing(sqlite3.connect(self.base / 'supervisor.sqlite3')) as connection, connection:
             connection.execute('DROP TABLE deliveries')
         self.assertCode(self.supervisor.status(), 'E_DB_INVALID')
 
     def test_atomic_rollback_if_alert_creation_fails(self):
         self.assertOk(self.start())
-        with sqlite3.connect(self.base / 'supervisor.sqlite3') as connection:
+        with closing(sqlite3.connect(self.base / 'supervisor.sqlite3')) as connection, connection:
             connection.execute("CREATE TRIGGER fail_delivery BEFORE INSERT ON deliveries BEGIN SELECT RAISE(ABORT,'synthetic'); END")
         self.assertCode(self.supervisor.ingest(self.event(signal='quota_exhausted')), 'E_DB_INVALID')
         self.assertEqual(self.current()['state'], 'RUNNING')
@@ -410,10 +410,10 @@ class SupervisorTests(unittest.TestCase):
 
     def test_unsupported_database_version_and_lock_fail_closed(self):
         db = self.base / 'supervisor.sqlite3'
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             connection.execute('PRAGMA user_version=99')
         self.assertCode(self.supervisor.check(), 'E_DB_INVALID')
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection, connection:
             self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 99)
             connection.execute('PRAGMA user_version=1')
         # 模拟 SQLITE_BUSY，避免测试依赖真实 5 秒阻塞时长。
@@ -449,7 +449,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_logically_corrupt_journal_does_not_echo_arbitrary_text(self):
         event = self.block()
-        with sqlite3.connect(self.base / 'supervisor.sqlite3') as connection:
+        with closing(sqlite3.connect(self.base / 'supervisor.sqlite3')) as connection, connection:
             connection.execute('UPDATE events SET fingerprint=? WHERE event_id=?', (_CANARY, event['event_id']))
         self.assertCode(self.supervisor.check(), 'E_DB_INVALID')
 
@@ -545,7 +545,7 @@ class SupervisorTests(unittest.TestCase):
         self.clock.return_value = 5000
         self.assertCode(self.supervisor.resume(_TASK), 'E_RETRY_DEADLINE')
         # 仅模拟旧版本的 operator-linked 表结构；不修改任何事件来源。
-        with sqlite3.connect(self.base / 'supervisor.sqlite3') as connection:
+        with closing(sqlite3.connect(self.base / 'supervisor.sqlite3')) as connection, connection:
             connection.execute('UPDATE deliveries SET event_id=?', (self.current()['event_id'],))
         before = self.supervisor.check()['Data']
         self.assertCode(self.restart().notify(_TASK, enabled=True), 'E_DELIVERY_PROVENANCE')
